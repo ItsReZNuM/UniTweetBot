@@ -9,111 +9,32 @@ import json
 
 STATE = {}
 
-# مسیر پوشهٔ موقت برای ذخیرهٔ فایل‌ها
+# مسیر پوشهٔ موقت (در نسخه‌ی جدید دیگه استفاده خاصی نداره ولی برای سازگاری نگه داشتیم)
 TEMP_DIR = os.path.join(tempfile.gettempdir(), "tweet_bot_temp")
 os.makedirs(TEMP_DIR, exist_ok=True)
 
-def _download_file(bot: TeleBot, file_id: str) -> str:
-    """
-    دانلود یک فایل تلگرام به مسیر موقت و برگرداندن مسیر فایل
-    """
-    f = bot.get_file(file_id)
-    data = bot.download_file(f.file_path)
-    # انتخاب نام فایل از مسیر فایل تلگرام
-    filename = os.path.basename(f.file_path)
-    local_path = os.path.join(TEMP_DIR, filename)
-    with open(local_path, "wb") as out:
-        out.write(data)
-    return local_path
 
+# ==========================
+# ✅ نسخه‌ی جدید و ساده‌شده‌ی ارسال مدیا
+# ==========================
 def _send_media_to_user(bot: TeleBot, user_id: int, message: Message):
     """
-    ارسال محتوای پیام ادمین به کاربر با دانلود → ارسال → حذف فایل موقت
-    از انواع مدیای رایج پشتیبانی می‌کند.
+    ارسال پیام یا مدیا از ادمین به کاربر.
+    با استفاده از copy_message — سریع، تمیز و بدون دانلود فایل.
     """
-    # متن ساده
-    if message.content_type == 'text':
-        bot.send_message(user_id, message.text)
-        return True
-
-    # عکس (photo): آرایه‌ای از سایزها
-    if message.content_type == 'photo' and message.photo:
-        try:
-            largest = message.photo[-1]
-            local_path = _download_file(bot, largest.file_id)
-            with open(local_path, 'rb') as f:
-                bot.send_photo(user_id, f, caption=message.caption)
-            os.remove(local_path)
-            return True
-        except Exception:
-            return False
-
-    # ویدیو
-    if message.content_type == 'video' and message.video:
-        try:
-            local_path = _download_file(bot, message.video.file_id)
-            with open(local_path, 'rb') as f:
-                bot.send_video(user_id, f, caption=message.caption)
-            os.remove(local_path)
-            return True
-        except Exception:
-            return False
-
-    # داکیومنت (هر نوع فایل عمومی)
-    if message.content_type == 'document' and message.document:
-        try:
-            local_path = _download_file(bot, message.document.file_id)
-            with open(local_path, 'rb') as f:
-                bot.send_document(user_id, f, caption=message.caption)
-            os.remove(local_path)
-            return True
-        except Exception:
-            return False
-
-    # ویس (voice)
-    if message.content_type == 'voice' and message.voice:
-        try:
-            local_path = _download_file(bot, message.voice.file_id)
-            with open(local_path, 'rb') as f:
-                bot.send_voice(user_id, f, caption=message.caption)
-            os.remove(local_path)
-            return True
-        except Exception:
-            return False
-
-    # موسیقی (audio)
-    if message.content_type == 'audio' and message.audio:
-        try:
-            local_path = _download_file(bot, message.audio.file_id)
-            with open(local_path, 'rb') as f:
-                bot.send_audio(user_id, f, caption=message.caption)
-            os.remove(local_path)
-            return True
-        except Exception:
-            return False
-
-    # انیمیشن/گیف (animation)
-    if message.content_type == 'animation' and message.animation:
-        try:
-            local_path = _download_file(bot, message.animation.file_id)
-            with open(local_path, 'rb') as f:
-                bot.send_animation(user_id, f, caption=message.caption)
-            os.remove(local_path)
-            return True
-        except Exception:
-            return False
-
-    # ویدیو نُت / استیکر و ... → تلاش با copy_message
     try:
         bot.copy_message(user_id, message.chat.id, message.message_id)
+        bot.send_message(message.chat.id, "✅ پیام شما با موفقیت به کاربر ارسال شد.")
         return True
-    except Exception:
-        # اگر هیچ‌کدام نشد و فقط کپشن/متن داریم
-        if message.caption:
-            bot.send_message(user_id, message.caption)
-            return True
+    except Exception as e:
+        print(f"[!] خطا در ارسال پیام یا مدیا: {e}")
+        bot.send_message(message.chat.id, f"⚠️ ارسال پیام به کاربر انجام نشد:\n{e}")
         return False
 
+
+# ==========================
+# ثبت هندلرها
+# ==========================
 def register_admin_handlers(bot: TeleBot, admin_id: int):
     
     @bot.callback_query_handler(func=lambda call: call.data.startswith((
@@ -123,7 +44,7 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
         data, arg = call.data.split('_', 1)
         tweet = db_manager.get_tweet_by_admin_msg_id(call.message.message_id)
 
-        # اگر توییت وجود نداشت (مگر برای hour_)
+        # اگر توییت وجود نداشت
         if not tweet and data not in ['hour']:
             bot.answer_callback_query(call.id, "این توییت در دیتابیس یافت نشد.")
             return
@@ -224,7 +145,7 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
         elif data == 'reply':
             bot.edit_message_text(
                 "هر <b>مدیا یا متنی</b> که می‌خواهید به کاربر ارسال کنید، بفرستید (در پاسخ به این پیام) ↩️.\n\n"
-                "✅ فایل ابتدا روی سرور دانلود می‌شود، سپس برای کاربر ارسال و در نهایت حذف می‌شود.",
+                "✅ فایل مستقیماً برای کاربر فوروارد می‌شود.",
                 call.message.chat.id, call.message.message_id, parse_mode='HTML'
             )
             STATE[call.message.chat.id] = {
@@ -251,8 +172,7 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
 
         bot.answer_callback_query(call.id)
 
-
-    # 🧠 هندلر برای ورودی‌های متنی و مدیا از ادمین
+    # 🧠 دریافت پیام/مدیا از ادمین برای پاسخ به کاربر
     @bot.message_handler(func=lambda message: message.chat.id in ADMIN_USER_IDS and message.chat.id in STATE, content_types=[
         'text', 'photo', 'video', 'document', 'audio', 'voice', 'animation'
     ])
@@ -269,7 +189,7 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
             db_manager.reject_tweet(tweet_id, reason)
 
             try:
-                bot.send_message(user_id, f"❌ متأسفانه توییت شما <b>رد شد</b>.\n\n<b>دلیل رد شدن</b>:\n{reason}", parse_mode='HTML')
+                bot.send_message(user_id, f"❌ متأسفانه توییت شما <b>رد شد</b>.\n\n<b>دلیل:</b>\n{reason}", parse_mode='HTML')
                 bot.send_message(message.chat.id, "✅ پیام شما با موفقیت به کاربر ارسال شد.")
             except Exception:
                 bot.send_message(message.chat.id, "⚠️ خطای ارسال پیام به کاربر. احتمالاً کاربر ربات را بلاک کرده است.")
@@ -280,16 +200,14 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
             )
             del STATE[message.chat.id]
 
-        # ↩️ پاسخ به کاربر (دانلود → ارسال → حذف)
+        # ↩️ پاسخ به کاربر
         elif admin_state.get('mode') == 'awaiting_reply_content':
             user_id = admin_state['user_id']
             admin_msg_id = admin_state['admin_msg_id']
 
             ok = _send_media_to_user(bot, user_id, message)
-            if ok:
-                bot.send_message(message.chat.id, "✅ پیام شما با موفقیت به کاربر ارسال شد.")
-            else:
-                bot.send_message(message.chat.id, "⚠️ خطای ارسال پیام به کاربر (احتمالاً بلاک کرده است).")
+            if not ok:
+                bot.send_message(message.chat.id, "⚠️ ارسال پیام با خطا مواجه شد (ممکن است کاربر بلاک کرده باشد).")
 
             tweet = db_manager.get_tweet_by_admin_msg_id(admin_msg_id)
             bot.edit_message_text(
@@ -299,7 +217,7 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
             )
             del STATE[message.chat.id]
 
-        # 📝 مرحله دریافت متن جدید برای ویرایش
+        # 📝 دریافت متن جدید برای ویرایش
         elif admin_state.get('mode') == 'editing':
             new_text = message.text
             admin_msg_id = admin_state['admin_msg_id']
