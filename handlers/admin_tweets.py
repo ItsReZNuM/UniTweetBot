@@ -9,7 +9,6 @@ import json
 
 STATE = {}
 
-# مسیر پوشهٔ موقت (در نسخه‌ی جدید دیگه استفاده خاصی نداره ولی برای سازگاری نگه داشتیم)
 TEMP_DIR = os.path.join(tempfile.gettempdir(), "tweet_bot_temp")
 os.makedirs(TEMP_DIR, exist_ok=True)
 

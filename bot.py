@@ -1,3 +1,7 @@
+### This Tweet Bot Has Been coded for LU Uni By ReZNuM
+### Telegram ID : @ItsReZNuM
+### It Has been Opened In Github ...
+
 import telebot
 import logging
 from config import BOT_TOKEN, ADMIN_USER_IDS, ADMIN_ID
@@ -13,28 +17,19 @@ if not BOT_TOKEN:
     exit()
 
 if ADMIN_ID is None:
-    # این هشدار در حالتی که ADMIN_USER_IDS در .env خالی باشد ظاهر می‌شود.
     logger.warning("ADMIN_USER_IDS is not set correctly in .env file. Admin features will be disabled.")
 
-# مطمئن می‌شویم که دیتابیس قبل از رجیستر شدن هندلرها آماده است.
 db_manager.init_db()
 
-# تنظیم parse_mode پیش‌فرض بر روی HTML
-# این کار از خطاهای تجزیه Markdown (مثل خطای 400 قبلی) در بسیاری از موارد جلوگیری می‌کند.
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
 
-# ثبت هندلرها: فقط در صورتی که ادمین به درستی تنظیم شده باشد.
 if ADMIN_USER_IDS:
-    # 1. رجیستر کردن هندلرهای کاربر و ارسال ADMIN_ID
     user_tweets.register_user_handlers(bot, ADMIN_ID)
     
-    # 2. رجیستر کردن هندلرهای ادمین و ارسال ADMIN_ID (رفع خطای TypeError)
     admin_tweets.register_admin_handlers(bot, ADMIN_ID)
     
-    # 3. رجیستر کردن پنل ادمین (این تابع نیازی به ADMIN_ID به عنوان آرگومان ندارد)
     admin_panel.register_admin_panel_handlers(bot)
     
-    # 4. مقداردهی اولیه زمان‌بندی و ارسال ADMIN_ID برای گزارش‌های زمان‌بندی
     job_scheduler.init_scheduler(bot, ADMIN_ID)
 
 logger.info("Bot is starting...")

@@ -87,8 +87,7 @@ def submit_tweet(user_id, text, admin_msg_id):
     conn.close()
     return tweet_id
 
-# ... (سایر توابع دیتابیس برای مدیریت توییت‌ها، آمار، ساعات و ...)
-# توابع مورد نیاز برای حذف ساعت، انتقال توییت، به‌روزرسانی توییت و آمار در اینجا قرار می‌گیرند.
+
 
 def get_tweet_by_admin_msg_id(admin_msg_id):
     conn = get_db_connection()
@@ -100,7 +99,6 @@ def approve_tweet(tweet_id, hour):
     conn = get_db_connection()
     conn.execute("UPDATE tweets SET status = 'approved', approved_hour = ? WHERE id = ?", (hour, tweet_id))
     
-    # افزودن توییت به جدول زمان‌بندی
     cursor = conn.cursor()
     cursor.execute("SELECT tweet_ids FROM scheduler WHERE hour = ?", (hour,))
     row = cursor.fetchone()
@@ -181,6 +179,8 @@ def get_top_users(limit=5):
     conn.close()
     return [{"username": r['username'] or f'کاربر {r["success_tweets"]}', "count": r['success_tweets']} for r in rows]
 
+
+# فصد داشتم فیچر انتقال و حذف ساعت اضافه کنم ، ولی حوصله نداشتم این رو میتونی کلا پاک کنی 
 def remove_schedule_hour(hour_to_remove, hour_to_transfer):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -195,7 +195,6 @@ def remove_schedule_hour(hour_to_remove, hour_to_transfer):
         except json.JSONDecodeError:
             removed_ids = []
 
-    # اگر لیست خالی بود فقط ساعت را حذف کن
     if not removed_ids:
         conn.execute("DELETE FROM scheduler WHERE hour = ?", (hour_to_remove,))
         conn.commit()

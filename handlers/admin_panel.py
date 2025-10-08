@@ -13,7 +13,7 @@ MAX_TG_MSG_LEN = 4096  # محدودیت پیام تلگرام
 
 def _hours_list_markup(hours):
     """
-    فقط فهرست ساعت‌ها (بدون افزودن/حذف/انتقال)
+     فهرست ساعت‌ها
     """
     markup = InlineKeyboardMarkup(row_width=2)
     buttons = [InlineKeyboardButton(f"ساعت {h}:00 ⏰", callback_data=f"view_hour_{h}") for h in hours]
@@ -128,7 +128,6 @@ def register_admin_panel_handlers(bot: TeleBot):
             bot.answer_callback_query(call.id)
             return
 
-        # view_hour_{h}
         try:
             _, _, hour_str = call.data.split('_', 2)
             hour = int(hour_str)
@@ -161,9 +160,6 @@ def send_stats_menu(bot: TeleBot, chat_id, message_id=None):
     daily = db_manager.get_daily_stats()
     weekly = db_manager.get_weekly_stats()
     monthly = db_manager.get_monthly_stats()
-
-    # کاربران برتر
-    top_users = db_manager.get_top_users()
 
     stats_text = f"📊 <b>آمار کلی ربات</b>:\n"
     stats_text += f"👤 تعداد کل کاربران: {total_users}\n"
