@@ -38,8 +38,10 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
     
     @bot.callback_query_handler(func=lambda call: call.data.startswith((
         'approve_', 'reject_', 'confirm_reject_', 'cancel_reject_', 
-        'reply_', 'edit_', 'confirm_edit_', 'cancel_edit_', 'hour_')))
+        'reply_', 'edit_', 'confirm_edit_', 'cancel_edit_', 'hour_', 
+        'back_to_actions_')))
     def callback_admin_actions(call: CallbackQuery):
+
         data, arg = call.data.split('_', 1)
         tweet = db_manager.get_tweet_by_admin_msg_id(call.message.message_id)
 
@@ -104,13 +106,46 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
             bot.edit_message_text(
                 "ساعت ارسال این توییت را انتخاب کنید ⏰:",
                 call.message.chat.id, call.message.message_id,
-                reply_markup=tweet_hours_markup(hours)
+                reply_markup=tweet_hours_markup(hours, tweet['id'])
             )
             STATE[call.message.chat.id] = {
                 'mode': 'awaiting_hour_selection',
                 'tweet_id': tweet['id'],
                 'admin_msg_id': call.message.message_id
             }
+
+        # 🔙 بازگشت از منوی ساعت به منوی اصلی (تایید / رد / ویرایش / پاسخ)
+        elif data == 'back' and arg.startswith('to_actions_'):
+            try:
+                tweet_id = int(arg.split('_')[-1])
+            except ValueError:
+                bot.answer_callback_query(call.id, "شناسه نامعتبر است.")
+                return
+
+            # گرفتن متن توییت از دیتابیس
+            tweet = db_manager.get_tweet_by_admin_msg_id(call.message.message_id)
+            if not tweet:
+                # اگه از admin_msg_id پیدا نشد، بر اساس id مستقیم بگیر (اگه خواستی این متد رو بسازی)
+                conn = db_manager.get_db_connection()
+                row = conn.execute("SELECT * FROM tweets WHERE id = ?", (tweet_id,)).fetchone()
+                conn.close()
+                if not row:
+                    bot.answer_callback_query(call.id, "توییت یافت نشد.")
+                    return
+                tweet = dict(row)
+
+            text_to_display = tweet.get('text') or "متن توییت یافت نشد."
+            bot.edit_message_text(
+                f"<b>✨ توییت جدید</b>\n\n{text_to_display}",
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode='HTML',
+                reply_markup=tweet_action_markup(tweet_id)
+            )
+            if call.message.chat.id in STATE:
+                del STATE[call.message.chat.id]
+            bot.answer_callback_query(call.id)
+
 
         # 🕒 انتخاب ساعت مشخص
         elif data == 'hour':

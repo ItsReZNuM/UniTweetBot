@@ -8,15 +8,14 @@ from telebot import TeleBot
 import json
 
 scheduler = BackgroundScheduler(timezone=timezone('Asia/Tehran'))
+separator = "\n\n✎﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏\n\n"
 
 def init_scheduler(bot: TeleBot, admin_id: int):
-    # مقداردهی اولیه ساعات پیش‌فرض در دیتابیس اگر وجود نداشتند
     db_hours = db_manager.get_all_scheduler_hours()
     for hour in DEFAULT_TWEET_HOURS:
         if hour not in db_hours:
             db_manager.add_schedule_hour(hour)
             
-    # اضافه کردن کار زمان‌بندی به شکرت
     scheduler.add_job(
         send_scheduled_tweets,
         CronTrigger(minute=0, hour=','.join(map(str, DEFAULT_TWEET_HOURS))),
@@ -52,11 +51,10 @@ def send_scheduled_tweets(bot: TeleBot, admin_id: int):
         conn.close()
         return
 
-    for tweet in all_tweets:
-        tweets_text.append(f"🆔 @sedayedaneshjoo_lu\n\n#توییت\n\n{tweet['text']}\n\n✎﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏")
+    tweets_text = [f"{idx}) {tweet['text']}" for idx, tweet in enumerate(all_tweets, start=1)]
 
-    final_message = "\n\n".join(tweets_text)
-    
+    final_message = "#توییت\n\n" + separator.join(tweets_text) + f"\n\n🆔 {CHANNEL_USERNAME}"
+
     try:
         # ارسال توییت‌ها به کانال
         bot.send_message(CHANNEL_USERNAME, final_message, parse_mode='HTML')
@@ -69,7 +67,7 @@ def send_scheduled_tweets(bot: TeleBot, admin_id: int):
         # خالی کردن لیست توییت‌های این ساعت
         conn.execute("UPDATE scheduler SET tweet_ids = '[]' WHERE hour = ?", (current_hour,))
         
-        bot.send_message(admin_id, f"✅ **{len(tweet_ids)}** توییت در ساعت **{current_hour}:00** در کانال ارسال شد.")
+        bot.send_message(admin_id, f"✅ *{len(tweet_ids)}* توییت در ساعت *{current_hour}:00* در کانال ارسال شد.")
         
     except Exception as e:
         bot.send_message(admin_id, f"⚠️ خطای ارسال توییت به کانال: {e}")

@@ -30,12 +30,13 @@ def edit_tweet_markup(tweet_id):
     )
     return markup
 
-def tweet_hours_markup(hours):
+def tweet_hours_markup(hours, tweet_id):
     markup = InlineKeyboardMarkup(row_width=3)
-    # 🌟 FIX 1: تغییر callback_data از hour_select_{h} به hour_{h} برای تجزیه آسان‌تر
     buttons = [InlineKeyboardButton(f"{h}:00 ⏰", callback_data=f"hour_{h}") for h in hours]
     markup.add(*buttons)
+    markup.add(InlineKeyboardButton("🔙 بازگشت", callback_data=f"back_to_actions_{tweet_id}"))
     return markup
+
 
 def admin_panel_markup():
     markup = ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
