@@ -9,6 +9,7 @@ from utils.keyboards import (
     edit_tweet_markup,
     tweet_hours_markup
 )
+import jdatetime
 from config import ADMIN_USER_IDS
 
 STATE = {}
@@ -31,6 +32,35 @@ def _format_admin_tweet_message(user_id: int, tweet_text: str) -> str:
 
     user_display = f"@{username}" if username else str(user_id)
     return f"<b>✨ توییت جدید</b> از کاربر: {user_display}\n\n{tweet_text}"
+
+def _format_admin_tweet_message(user_id: int, tweet_text: str) -> str:
+    conn = db_manager.get_db_connection()
+    row = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
+    conn.close()
+
+    username = row["username"] if row and row["username"] else user_id
+    return f"<b>✨ توییت جدید</b> از کاربر: @{username}\n\n{tweet_text}"
+
+
+def _status_label(status: str) -> str:
+    return {
+        "approved": "✅ تایید شد",
+        "rejected": "❌ رد شد",
+        "sent": "📤 ارسال شد"
+    }.get(status, "")
+
+
+def _approved_time_block(approved_hour: int) -> str:
+    now = jdatetime.datetime.now()
+    weekdays = [
+        "دوشنبه", "سه‌شنبه", "چهارشنبه",
+        "پنجشنبه", "جمعه", "شنبه", "یکشنبه"
+    ]
+
+    return (
+        f"\n\n"
+        f"🕒 ساعت ارسال: {approved_hour}:00"
+    )
 
 
 def _status_line(status: str) -> str:
@@ -55,35 +85,49 @@ def _append_status_if_needed(base_text: str, status: str) -> str:
 
 
 def _refresh_admin_message(bot: TeleBot, admin_chat_id: int, tweet_id: int):
-    """
-    همان پیام اصلی ادمین (admin_msg_id) را با متن صحیح (فرمت اولیه + وضعیت) آپدیت می‌کند.
-    """
     conn = db_manager.get_db_connection()
-    tweet = conn.execute("SELECT id, user_id, text, status, admin_msg_id FROM tweets WHERE id = ?", (tweet_id,)).fetchone()
+    tweet = conn.execute("""
+        SELECT user_id, text, status, approved_hour, admin_msg_id
+        FROM tweets WHERE id = ?
+    """, (tweet_id,)).fetchone()
     conn.close()
 
-    if not tweet:
-        return
-
-    admin_msg_id = tweet["admin_msg_id"]
-    if not admin_msg_id:
+    if not tweet or not tweet["admin_msg_id"]:
         return
 
     base = _format_admin_tweet_message(tweet["user_id"], tweet["text"])
-    final_text = _append_status_if_needed(base, tweet["status"])
+    status_line = _status_label(tweet["status"])
 
-    # کیبورد مثل قبل باقی بماند
+    if status_line and "وضعیت:" not in base:
+        base += f"\n\n━━━━━━━━━━\n<b>وضعیت:</b> {status_line}"
+
+    # فقط اگر تایید شده بود، زمان رو اضافه کن
+    if tweet["status"] == "approved" and tweet["approved_hour"] is not None:
+        base += _approved_time_block(tweet["approved_hour"])
+
     try:
         bot.edit_message_text(
-            final_text,
+            base,
             admin_chat_id,
-            admin_msg_id,
+            tweet["admin_msg_id"],
             parse_mode="HTML",
             reply_markup=tweet_action_markup(tweet_id)
         )
     except:
-        # اگر به هر دلیل ادیت نشد (مثلاً پیام خیلی قدیمی)، کاری نمی‌کنیم
         pass
+
+
+# ==========================
+# بقیه کد = منطق قبلی بدون تغییر
+# ==========================
+def _send_media_to_user(bot: TeleBot, user_id: int, message: Message):
+    try:
+        bot.copy_message(user_id, message.chat.id, message.message_id)
+        bot.send_message(message.chat.id, "✅ پیام با موفقیت برای کاربر ارسال شد.")
+        return True
+    except Exception as e:
+        bot.send_message(message.chat.id, f"⚠️ خطا در ارسال پیام:\n{e}")
+        return False
 
 
 # ==========================
