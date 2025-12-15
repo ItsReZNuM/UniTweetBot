@@ -18,6 +18,75 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 
 
 # ==========================
+# ساخت متن پیام ادمین با همان فرمت اولیه
+# ==========================
+def _format_admin_tweet_message(user_id: int, tweet_text: str) -> str:
+    conn = db_manager.get_db_connection()
+    row = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
+    conn.close()
+
+    username = None
+    if row:
+        username = row["username"]
+
+    user_display = f"@{username}" if username else str(user_id)
+    return f"<b>✨ توییت جدید</b> از کاربر: {user_display}\n\n{tweet_text}"
+
+
+def _status_line(status: str) -> str:
+    mapping = {
+        "approved": "✅ تایید شد",
+        "rejected": "❌ رد شد",
+        "sent": "📤 ارسال شد",
+    }
+    return mapping.get(status, "")
+
+
+def _append_status_if_needed(base_text: str, status: str) -> str:
+    line = _status_line(status)
+    if not line:
+        return base_text
+
+    # اگر قبلاً وضعیت اضافه شده بود، دوباره اضافه نکن
+    if "<b>وضعیت:</b>" in base_text or "وضعیت:" in base_text:
+        return base_text
+
+    return f"{base_text}\n\n━━━━━━━━━━\n<b>وضعیت:</b> {line}"
+
+
+def _refresh_admin_message(bot: TeleBot, admin_chat_id: int, tweet_id: int):
+    """
+    همان پیام اصلی ادمین (admin_msg_id) را با متن صحیح (فرمت اولیه + وضعیت) آپدیت می‌کند.
+    """
+    conn = db_manager.get_db_connection()
+    tweet = conn.execute("SELECT id, user_id, text, status, admin_msg_id FROM tweets WHERE id = ?", (tweet_id,)).fetchone()
+    conn.close()
+
+    if not tweet:
+        return
+
+    admin_msg_id = tweet["admin_msg_id"]
+    if not admin_msg_id:
+        return
+
+    base = _format_admin_tweet_message(tweet["user_id"], tweet["text"])
+    final_text = _append_status_if_needed(base, tweet["status"])
+
+    # کیبورد مثل قبل باقی بماند
+    try:
+        bot.edit_message_text(
+            final_text,
+            admin_chat_id,
+            admin_msg_id,
+            parse_mode="HTML",
+            reply_markup=tweet_action_markup(tweet_id)
+        )
+    except:
+        # اگر به هر دلیل ادیت نشد (مثلاً پیام خیلی قدیمی)، کاری نمی‌کنیم
+        pass
+
+
+# ==========================
 # ارسال پیام یا مدیا از ادمین به کاربر
 # ==========================
 def _send_media_to_user(bot: TeleBot, user_id: int, message: Message):
@@ -73,8 +142,6 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
                 return
 
             tweet = dict(row)
-
-
 
         # =========================
         # ❌ رد توییت (مرحله اول)
@@ -156,17 +223,17 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
 
             user_id = row['user_id']
 
-            # فقط یک بار approve
+            # فقط یک بار approve (منطق قبلی)
             db_manager.approve_tweet(tweet_id, hour)
 
-            # پیام به ادمین
+            # پیام به ادمین (مثل قبل)
             bot.send_message(
                 call.message.chat.id,
                 f"✅ توییت در ساعت <b>{hour}:00</b> زمان‌بندی شد.",
                 parse_mode='HTML'
             )
 
-            # پیام به کاربر ✅
+            # پیام به کاربر ✅ (مثل قبل - حذف نشده)
             try:
                 bot.send_message(
                     user_id,
@@ -175,6 +242,9 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
                 )
             except:
                 pass
+
+            # ✅ فقط اضافه کردن قابلیت: آپدیت همان پیام اصلی ادمین با وضعیت
+            _refresh_admin_message(bot, call.message.chat.id, tweet_id)
 
             STATE.pop(call.message.chat.id, None)
 
@@ -217,12 +287,17 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
             if not state or 'new_text' not in state:
                 return
 
+            # منطق قبلی: فقط آپدیت متن
             db_manager.update_tweet_text(tweet_id, state['new_text'])
 
             bot.send_message(
                 call.message.chat.id,
                 "✅ متن توییت با موفقیت ویرایش شد."
             )
+
+            # ✅ فقط اضافه کردن قابلیت: بعد از تایید ویرایش، همان پیام اصلی ادمین با متن جدید (و وضعیت اگر داشت) آپدیت شود
+            _refresh_admin_message(bot, call.message.chat.id, tweet_id)
+
             STATE.pop(call.message.chat.id, None)
 
         bot.answer_callback_query(call.id)
@@ -244,8 +319,10 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
             tweet_id = state['tweet_id']
             user_id = state['user_id']
 
+            # منطق قبلی: رد + ذخیره دلیل
             db_manager.reject_tweet(tweet_id, reason)
 
+            # پیام به کاربر (مثل قبل)
             try:
                 bot.send_message(
                     user_id,
@@ -259,6 +336,10 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
                 message.chat.id,
                 "❌ توییت با موفقیت رد شد."
             )
+
+            # ✅ فقط اضافه کردن قابلیت: آپدیت همان پیام اصلی ادمین با وضعیت رد شد
+            _refresh_admin_message(bot, message.chat.id, tweet_id)
+
             STATE.pop(message.chat.id, None)
 
         # ↩️ ارسال پیام/مدیا به کاربر
