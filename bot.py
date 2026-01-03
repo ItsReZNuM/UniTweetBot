@@ -8,6 +8,7 @@ from config import BOT_TOKEN, ADMIN_USER_IDS, ADMIN_ID
 from database import db_manager
 from handlers import user_tweets, admin_tweets, admin_panel
 from utils import job_scheduler
+from handlers.chart_handlers import register_chart_handlers
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -31,6 +32,8 @@ if ADMIN_USER_IDS:
     admin_panel.register_admin_panel_handlers(bot)
     
     job_scheduler.init_scheduler(bot, ADMIN_ID)
+    
+register_chart_handlers(bot)
 
 logger.info("Bot is starting...")
 

@@ -73,3 +73,20 @@ def transfer_hour_markup(hour_to_remove, available_hours):
     ]
     markup.add(*buttons)
     return markup
+
+def main_menu_markup(is_admin: bool = False):
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+
+    if is_admin:
+        # 👑 فقط منوی ادمین
+        markup.add(
+            KeyboardButton("👑 پنل مدیریت چارت")
+        )
+    else:
+        # 👤 فقط منوی کاربر
+        markup.add(
+            KeyboardButton("🐦 ارسال توییت"),
+            KeyboardButton("📊 دریافت چارت"),
+        )
+
+    return markup

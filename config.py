@@ -15,3 +15,4 @@ DATABASE_NAME = os.path.join(BASE_DIR, os.getenv("DATABASE_NAME", "database.db")
 
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
 DEFAULT_TWEET_HOURS = [int(x.strip()) for x in os.getenv("DEFAULT_TWEET_HOURS", "9,12,15,18,21,0").split(',') if x.strip().isdigit()]
+MIN_SIMILARITY = int(os.getenv("MIN_SIMILARITY", "85"))

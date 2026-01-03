@@ -1,20 +1,22 @@
-university_tweet_bot/
-├── .env
-├── .gitignore
-├── README.md
-├── requirements.txt
-├── bot.py
-├── config.py
-├── database/
-│   ├── __init__.py
-│   └── db_manager.py
-├── handlers/
-│   ├── __init__.py
-│   ├── admin_panel.py
-│   ├── admin_tweets.py
-│   └── user_tweets.py
-├── utils/
-│   ├── __init__.py
-│   ├── job_scheduler.py
-│   ├── keyboards.py
-│   └── rate_limit.py
+﻿|-- database
+    |-- db_manager.py
+    |-- __init__.py
+|-- handlers
+    |-- admin_panel.py
+    |-- admin_tweets.py
+    |-- user_tweets.py
+    |-- __init__.py
+|-- utils
+    |-- job_scheduler.py
+    |-- keyboards.py
+    |-- rate_limit.py
+    |-- __init__.py
+|-- .env
+|-- .env.example
+|-- .gitignore
+|-- bot.py
+|-- config.py
+|-- requirements.txt
+|-- tree.txt
+|-- tree_gen.bat
+|-- tweets.db
