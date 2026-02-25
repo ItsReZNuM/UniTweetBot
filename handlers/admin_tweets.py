@@ -26,18 +26,6 @@ def _format_admin_tweet_message(user_id: int, tweet_text: str) -> str:
     row = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
     conn.close()
 
-    username = None
-    if row:
-        username = row["username"]
-
-    user_display = f"@{username}" if username else str(user_id)
-    return f"<b>✨ توییت جدید</b> از کاربر: {user_display}\n\n{tweet_text}"
-
-def _format_admin_tweet_message(user_id: int, tweet_text: str) -> str:
-    conn = db_manager.get_db_connection()
-    row = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
-    conn.close()
-
     username = row["username"] if row and row["username"] else user_id
     return f"<b>✨ توییت جدید</b> از کاربر: @{username}\n\n{tweet_text}"
 
@@ -51,40 +39,17 @@ def _status_label(status: str) -> str:
 
 
 def _approved_time_block(approved_hour: int) -> str:
-    now = jdatetime.datetime.now()
-    weekdays = [
-        "دوشنبه", "سه‌شنبه", "چهارشنبه",
-        "پنجشنبه", "جمعه", "شنبه", "یکشنبه"
-    ]
-
     return (
         f"\n\n"
         f"🕒 ساعت ارسال: {approved_hour}:00"
     )
 
 
-def _status_line(status: str) -> str:
-    mapping = {
-        "approved": "✅ تایید شد",
-        "rejected": "❌ رد شد",
-        "sent": "📤 ارسال شد",
-    }
-    return mapping.get(status, "")
-
-
-def _append_status_if_needed(base_text: str, status: str) -> str:
-    line = _status_line(status)
-    if not line:
-        return base_text
-
-    # اگر قبلاً وضعیت اضافه شده بود، دوباره اضافه نکن
-    if "<b>وضعیت:</b>" in base_text or "وضعیت:" in base_text:
-        return base_text
-
-    return f"{base_text}\n\n━━━━━━━━━━\n<b>وضعیت:</b> {line}"
-
-
-def _refresh_admin_message(bot: TeleBot, admin_chat_id: int, tweet_id: int):
+def _refresh_admin_message(bot: TeleBot, admin_chat_id: int, tweet_id: int, message_id: int = None):
+    """
+    پیام اصلی توییت رو با وضعیت جدید آپدیت می‌کنه.
+    اگر message_id داده نشه، از admin_msg_id دیتابیس استفاده می‌کنه.
+    """
     conn = db_manager.get_db_connection()
     tweet = conn.execute("""
         SELECT user_id, text, status, approved_hour, admin_msg_id
@@ -92,16 +57,19 @@ def _refresh_admin_message(bot: TeleBot, admin_chat_id: int, tweet_id: int):
     """, (tweet_id,)).fetchone()
     conn.close()
 
-    if not tweet or not tweet["admin_msg_id"]:
+    if not tweet:
+        return
+
+    target_msg_id = message_id or tweet["admin_msg_id"]
+    if not target_msg_id:
         return
 
     base = _format_admin_tweet_message(tweet["user_id"], tweet["text"])
     status_line = _status_label(tweet["status"])
 
-    if status_line and "وضعیت:" not in base:
+    if status_line:
         base += f"\n\n━━━━━━━━━━\n<b>وضعیت:</b> {status_line}"
 
-    # فقط اگر تایید شده بود، زمان رو اضافه کن
     if tweet["status"] == "approved" and tweet["approved_hour"] is not None:
         base += _approved_time_block(tweet["approved_hour"])
 
@@ -109,25 +77,12 @@ def _refresh_admin_message(bot: TeleBot, admin_chat_id: int, tweet_id: int):
         bot.edit_message_text(
             base,
             admin_chat_id,
-            tweet["admin_msg_id"],
+            target_msg_id,
             parse_mode="HTML",
             reply_markup=tweet_action_markup(tweet_id)
         )
-    except:
+    except Exception:
         pass
-
-
-# ==========================
-# بقیه کد = منطق قبلی بدون تغییر
-# ==========================
-def _send_media_to_user(bot: TeleBot, user_id: int, message: Message):
-    try:
-        bot.copy_message(user_id, message.chat.id, message.message_id)
-        bot.send_message(message.chat.id, "✅ پیام با موفقیت برای کاربر ارسال شد.")
-        return True
-    except Exception as e:
-        bot.send_message(message.chat.id, f"⚠️ خطا در ارسال پیام:\n{e}")
-        return False
 
 
 # ==========================
@@ -154,9 +109,8 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
         'hour_', 'back_to_actions_'
     )))
     def callback_admin_actions(call: CallbackQuery):
-        data, arg = call.data.split('_', 1)
 
-        # استخراج tweet_id از callback_data
+        # استخراج data و arg
         try:
             data, arg = call.data.split('_', 1)
 
@@ -164,16 +118,15 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
             if not data.startswith('hour'):
                 try:
                     tweet_id = int(arg.split('_')[-1])
-                except:
+                except Exception:
                     pass
 
-        except:
+        except Exception:
             bot.answer_callback_query(call.id, "شناسه توییت نامعتبر است.")
             return
 
-        # دریافت توییت از دیتابیس (مستقل از message_id)
+        # دریافت توییت از دیتابیس
         tweet = None
-
         if data != 'hour':
             conn = db_manager.get_db_connection()
             row = conn.execute(
@@ -187,63 +140,81 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
 
             tweet = dict(row)
 
+        # message_id پیامی که کاربر روی دکمه‌اش کلیک کرده
+        origin_msg_id = call.message.message_id
+
         # =========================
-        # ❌ رد توییت (مرحله اول)
+        # ❌ رد توییت (مرحله اول) → ادیت همون پیام با دکمه‌های تایید/لغو
         # =========================
         if data == 'reject':
-            bot.send_message(
+            bot.edit_message_text(
+                f"{_format_admin_tweet_message(tweet['user_id'], tweet['text'])}\n\n"
+                "❓ آیا مطمئن هستید که می‌خواهید این توییت را رد کنید؟",
                 call.message.chat.id,
-                "❌ آیا مطمئن هستید که می‌خواهید این توییت را رد کنید؟",
+                origin_msg_id,
+                parse_mode='HTML',
                 reply_markup=confirm_rejection_markup(tweet_id)
             )
 
         # =========================
-        # 🔙 لغو عملیات
+        # 🔙 لغو عملیات → برگشت به پیام اصلی با دکمه‌های اصلی
         # =========================
         elif data.startswith('cancel'):
-            bot.send_message(
-                call.message.chat.id,
-                "🔙 عملیات لغو شد. می‌توانید دوباره از منوی توییت اقدام کنید."
-            )
             STATE.pop(call.message.chat.id, None)
+            # بازگشت به پیام اصلی بدون وضعیت
+            base = _format_admin_tweet_message(tweet['user_id'], tweet['text'])
+            bot.edit_message_text(
+                base,
+                call.message.chat.id,
+                origin_msg_id,
+                parse_mode='HTML',
+                reply_markup=tweet_action_markup(tweet_id)
+            )
 
         # =========================
-        # ❌ تایید رد → گرفتن دلیل
+        # ❌ تایید رد → گرفتن دلیل از ادمین (پیام جداگانه ضروریه چون input متنیه)
         # =========================
         elif data == 'confirm' and arg.startswith('reject'):
-            bot.send_message(
+            bot.edit_message_text(
+                f"{_format_admin_tweet_message(tweet['user_id'], tweet['text'])}\n\n"
+                "✍️ لطفاً <b>دلیل رد</b> توییت را در پیام بعدی ارسال کنید:",
                 call.message.chat.id,
-                "✍️ لطفاً <b>دلیل رد</b> توییت را ارسال کنید:",
+                origin_msg_id,
                 parse_mode='HTML'
             )
             STATE[call.message.chat.id] = {
                 'mode': 'awaiting_rejection_reason',
                 'tweet_id': tweet_id,
-                'user_id': tweet['user_id']
+                'user_id': tweet['user_id'],
+                'origin_msg_id': origin_msg_id   # ← ذخیره برای ادیت بعدی
             }
 
         # =========================
-        # ✅ تایید توییت → انتخاب ساعت
+        # ✅ تایید توییت → ادیت همون پیام با منوی ساعت‌ها
         # =========================
         elif data == 'approve':
             hours = db_manager.get_all_scheduler_hours()
-            bot.send_message(
-                call.message.chat.id,
+            bot.edit_message_text(
+                f"{_format_admin_tweet_message(tweet['user_id'], tweet['text'])}\n\n"
                 "⏰ ساعت ارسال توییت را انتخاب کنید:",
+                call.message.chat.id,
+                origin_msg_id,
+                parse_mode='HTML',
                 reply_markup=tweet_hours_markup(hours, tweet_id)
             )
             STATE[call.message.chat.id] = {
                 'mode': 'awaiting_hour_selection',
-                'tweet_id': tweet_id
+                'tweet_id': tweet_id,
+                'origin_msg_id': origin_msg_id   # ← ذخیره برای ادیت بعدی
             }
 
         # =========================
-        # ⏰ انتخاب ساعت ارسال
+        # ⏰ انتخاب ساعت ارسال → ادیت همون پیام با وضعیت نهایی
         # =========================
         elif data == 'hour':
             try:
                 hour = int(arg)
-            except:
+            except Exception:
                 bot.answer_callback_query(call.id, "ساعت نامعتبر است.")
                 return
 
@@ -253,8 +224,9 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
                 return
 
             tweet_id = state['tweet_id']
+            saved_origin_msg_id = state.get('origin_msg_id', origin_msg_id)
 
-            # گرفتن user_id مستقیماً از دیتابیس
+            # گرفتن user_id از دیتابیس
             conn = db_manager.get_db_connection()
             row = conn.execute(
                 "SELECT user_id FROM tweets WHERE id = ?", (tweet_id,)
@@ -267,33 +239,26 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
 
             user_id = row['user_id']
 
-            # فقط یک بار approve (منطق قبلی)
+            # ذخیره تایید در دیتابیس
             db_manager.approve_tweet(tweet_id, hour)
 
-            # پیام به ادمین (مثل قبل)
-            bot.send_message(
-                call.message.chat.id,
-                f"✅ توییت در ساعت <b>{hour}:00</b> زمان‌بندی شد.",
-                parse_mode='HTML'
-            )
-
-            # پیام به کاربر ✅ (مثل قبل - حذف نشده)
+            # پیام به کاربر
             try:
                 bot.send_message(
                     user_id,
                     f"✅ توییت شما <b>تأیید شد</b> و در ساعت <b>{hour}:00</b> منتشر خواهد شد ⏰",
                     parse_mode='HTML'
                 )
-            except:
+            except Exception:
                 pass
-
-            # ✅ فقط اضافه کردن قابلیت: آپدیت همان پیام اصلی ادمین با وضعیت
-            _refresh_admin_message(bot, call.message.chat.id, tweet_id)
 
             STATE.pop(call.message.chat.id, None)
 
+            # ادیت همون پیام اصلی با وضعیت نهایی
+            _refresh_admin_message(bot, call.message.chat.id, tweet_id, saved_origin_msg_id)
+
         # =========================
-        # ↩️ پاسخ به کاربر
+        # ↩️ پاسخ به کاربر (input متنی/مدیا → پیام جداگانه ضروریه)
         # =========================
         elif data == 'reply':
             bot.send_message(
@@ -304,50 +269,62 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
             STATE[call.message.chat.id] = {
                 'mode': 'awaiting_reply_content',
                 'tweet_id': tweet_id,
-                'user_id': tweet['user_id']
+                'user_id': tweet['user_id'],
+                'origin_msg_id': origin_msg_id
             }
 
         # =========================
-        # 📝 ویرایش توییت
+        # 📝 ویرایش توییت → ادیت همون پیام با راهنما
         # =========================
         elif data == 'edit':
-            bot.send_message(
-                call.message.chat.id,
+            bot.edit_message_text(
                 f"📝 <b>متن فعلی توییت</b>:\n\n<code>{tweet['text']}</code>\n\n"
-                "✍️ متن جدید را ارسال کنید:",
+                "✍️ متن جدید را در پیام بعدی ارسال کنید:",
+                call.message.chat.id,
+                origin_msg_id,
                 parse_mode='HTML',
                 reply_markup=edit_tweet_markup(tweet_id)
             )
             STATE[call.message.chat.id] = {
                 'mode': 'editing',
-                'tweet_id': tweet_id
+                'tweet_id': tweet_id,
+                'origin_msg_id': origin_msg_id   # ← ذخیره برای ادیت بعدی
             }
 
         # =========================
-        # ✅ تایید ویرایش
+        # ✅ تایید ویرایش → ادیت همون پیام با متن جدید
         # =========================
         elif data == 'confirm' and arg.startswith('edit'):
             state = STATE.get(call.message.chat.id)
             if not state or 'new_text' not in state:
+                bot.answer_callback_query(call.id, "ابتدا متن جدید را ارسال کنید.")
                 return
 
-            # منطق قبلی: فقط آپدیت متن
+            saved_origin_msg_id = state.get('origin_msg_id', origin_msg_id)
             db_manager.update_tweet_text(tweet_id, state['new_text'])
-
-            bot.send_message(
-                call.message.chat.id,
-                "✅ متن توییت با موفقیت ویرایش شد."
-            )
-
-            # ✅ فقط اضافه کردن قابلیت: بعد از تایید ویرایش، همان پیام اصلی ادمین با متن جدید (و وضعیت اگر داشت) آپدیت شود
-            _refresh_admin_message(bot, call.message.chat.id, tweet_id)
-
             STATE.pop(call.message.chat.id, None)
+
+            # ادیت همون پیام اصلی با متن جدید
+            _refresh_admin_message(bot, call.message.chat.id, tweet_id, saved_origin_msg_id)
+
+        # =========================
+        # 🔙 بازگشت به دکمه‌های اصلی از منوی ساعت
+        # =========================
+        elif data == 'back' and arg.startswith('to_actions'):
+            STATE.pop(call.message.chat.id, None)
+            base = _format_admin_tweet_message(tweet['user_id'], tweet['text'])
+            bot.edit_message_text(
+                base,
+                call.message.chat.id,
+                origin_msg_id,
+                parse_mode='HTML',
+                reply_markup=tweet_action_markup(tweet_id)
+            )
 
         bot.answer_callback_query(call.id)
 
     # =====================================================
-    # MESSAGE HANDLER (ورودی ادمین)
+    # MESSAGE HANDLER (ورودی متنی ادمین)
     # =====================================================
     @bot.message_handler(
         func=lambda m: m.chat.id in ADMIN_USER_IDS and m.chat.id in STATE,
@@ -356,35 +333,38 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
     def handle_admin_input(message: Message):
 
         state = STATE.get(message.chat.id)
+        if not state:
+            return
 
         # ❌ دریافت دلیل رد
         if state['mode'] == 'awaiting_rejection_reason':
             reason = message.text
             tweet_id = state['tweet_id']
             user_id = state['user_id']
+            origin_msg_id = state.get('origin_msg_id')
 
-            # منطق قبلی: رد + ذخیره دلیل
             db_manager.reject_tweet(tweet_id, reason)
 
-            # پیام به کاربر (مثل قبل)
+            # پیام به کاربر
             try:
                 bot.send_message(
                     user_id,
                     f"❌ متأسفانه توییت شما رد شد.\n\n<b>دلیل:</b>\n{reason}",
                     parse_mode='HTML'
                 )
-            except:
+            except Exception:
                 pass
 
-            bot.send_message(
-                message.chat.id,
-                "❌ توییت با موفقیت رد شد."
-            )
-
-            # ✅ فقط اضافه کردن قابلیت: آپدیت همان پیام اصلی ادمین با وضعیت رد شد
-            _refresh_admin_message(bot, message.chat.id, tweet_id)
-
             STATE.pop(message.chat.id, None)
+
+            # حذف پیام راهنمای ادمین (اختیاری - جلوگیری از شلوغی)
+            try:
+                bot.delete_message(message.chat.id, message.message_id)
+            except Exception:
+                pass
+
+            # ادیت پیام اصلی توییت با وضعیت رد شد
+            _refresh_admin_message(bot, message.chat.id, tweet_id, origin_msg_id)
 
         # ↩️ ارسال پیام/مدیا به کاربر
         elif state['mode'] == 'awaiting_reply_content':
@@ -394,9 +374,27 @@ def register_admin_handlers(bot: TeleBot, admin_id: int):
         # 📝 دریافت متن جدید برای ویرایش
         elif state['mode'] == 'editing':
             STATE[message.chat.id]['new_text'] = message.text
-            bot.send_message(
-                message.chat.id,
-                f"📝 متن جدید ذخیره شد:\n\n<code>{message.text}</code>\n\n"
-                "برای اعمال تغییر، دکمه «تایید ویرایش» را بزنید.",
-                parse_mode='HTML'
-            )
+
+            # حذف پیام ادمین برای جلوگیری از شلوغی
+            try:
+                bot.delete_message(message.chat.id, message.message_id)
+            except Exception:
+                pass
+
+            # ادیت همون پیام اصلی توییت با راهنمای تایید
+            origin_msg_id = state.get('origin_msg_id')
+            tweet_id = state['tweet_id']
+
+            conn = db_manager.get_db_connection()
+            row = conn.execute("SELECT user_id, text FROM tweets WHERE id = ?", (tweet_id,)).fetchone()
+            conn.close()
+
+            if row and origin_msg_id:
+                bot.edit_message_text(
+                    f"📝 <b>متن جدید</b>:\n\n<code>{message.text}</code>\n\n"
+                    "برای اعمال تغییر، دکمه «تایید ویرایش» را بزنید.",
+                    message.chat.id,
+                    origin_msg_id,
+                    parse_mode='HTML',
+                    reply_markup=edit_tweet_markup(tweet_id)
+                )
