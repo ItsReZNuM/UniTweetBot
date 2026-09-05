@@ -15,6 +15,12 @@ def tweet_action_markup(tweet_id):
     )
     return markup
 
+def tweet_done_markup(tweet_id):
+    """کیبورد بعد از تایید یا رد توییت؛ امکان ارسال پیام جداگانه به کاربر همچنان حفظ می‌شود"""
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("↩️ ارسال پیام به کاربر", callback_data=f"reply_{tweet_id}"))
+    return markup
+
 def confirm_rejection_markup(tweet_id):
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -49,8 +55,11 @@ def main_menu_markup(user_id: int):
             KeyboardButton("⏰ ساعات توییت"),
         )
         markup.add(
-            KeyboardButton("👑 پنل مدیریت چارت"),
+            KeyboardButton("📣 پیام همگانی"),
             KeyboardButton("👥 مدیریت ادمین‌ها"),
+        )
+        markup.add(
+            KeyboardButton("👑 پنل مدیریت چارت"),
         )
         markup.add(
             KeyboardButton("🐦 ارسال توییت"),
@@ -62,6 +71,7 @@ def main_menu_markup(user_id: int):
             KeyboardButton("⏰ ساعات توییت"),
         )
         markup.add(
+            KeyboardButton("📣 پیام همگانی"),
             KeyboardButton("👑 پنل مدیریت چارت"),
         )
         markup.add(
@@ -69,7 +79,6 @@ def main_menu_markup(user_id: int):
             KeyboardButton("📊 دریافت چارت"),
         )
     else:
-        # کاربر عادی
         markup.add(
             KeyboardButton("🐦 ارسال توییت"),
             KeyboardButton("📊 دریافت چارت"),

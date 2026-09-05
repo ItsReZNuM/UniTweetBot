@@ -1,14 +1,15 @@
+import json
+import time
 from telebot import TeleBot
 from telebot.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from database import db_manager
 from config import CHANNEL_USERNAME
-from states import S, set_state, get_state, reset
+from states import S, set_state, get_state, get_data, reset
 from utils.keyboards import (
     admin_management_markup,
     admin_del_list_markup,
     confirm_admin_del_markup
 )
-import json
 
 SEPARATOR = "\n\n✎﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏\n\n"
 MAX_TG_MSG_LEN = 4096
@@ -120,7 +121,7 @@ def register_admin_panel_handlers(bot: TeleBot):
         bot.answer_callback_query(call.id)
 
     # =====================================================
-    # هندلرهای مدیریت ادمین‌ها (فقط برای سوپرادمین)
+    # هندلرهای مدیریت ادمین‌ها (فقط سوپرادمین)
     # =====================================================
     @bot.message_handler(func=lambda m: db_manager.is_superadmin(m.chat.id) and m.text == "👥 مدیریت ادمین‌ها")
     @bot.message_handler(commands=['admins'])
@@ -280,6 +281,137 @@ def register_admin_panel_handlers(bot: TeleBot):
                 pass
         else:
             bot.send_message(message.chat.id, "❌ مشکلی در افزودن ادمین رخ داد.")
+
+    # =====================================================
+    # هندلرهای پیام همگانی (برای تمام ادمین‌ها)
+    # =====================================================
+    @bot.message_handler(func=lambda m: db_manager.is_admin(m.chat.id) and m.text == "📣 پیام همگانی")
+    @bot.message_handler(commands=['broadcast'])
+    def handle_broadcast_menu(message: Message):
+        set_state(message.chat.id, S.ADMIN_WAIT_BROADCAST, {})
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_broadcast"))
+        bot.send_message(
+            message.chat.id,
+            "📣 <b>ارسال پیام همگانی به تمام اعضا</b>\n\n"
+            "لطفاً هر پیامی که می‌خواهید ارسال شود را به این چت بفرستید یا فوروارد کنید.\n"
+            "<i>(پشتیبانی کامل از متن، عکس، ویدیو، داکیومنت، وویس، استیکر و پیام‌های فورواردی)</i>",
+            parse_mode='HTML',
+            reply_markup=markup
+        )
+
+    @bot.message_handler(
+        func=lambda m: db_manager.is_admin(m.chat.id) and get_state(m.chat.id) == S.ADMIN_WAIT_BROADCAST,
+        content_types=['text', 'photo', 'video', 'document', 'audio', 'voice', 'animation', 'sticker', 'video_note']
+    )
+    def handle_broadcast_message_received(message: Message):
+        users = db_manager.get_all_users_id()
+        set_state(message.chat.id, S.ADMIN_CONFIRM_BROADCAST, {'broadcast_msg_id': message.message_id})
+
+        markup = InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            InlineKeyboardButton("🚀 بله، همگانی بفرست", callback_data="confirm_broadcast"),
+            InlineKeyboardButton("❌ لغو عملیات", callback_data="cancel_broadcast")
+        )
+
+        bot.reply_to(
+            message,
+            f"⚠️ <b>پیش‌نمایش پیام همگانی دریافت شد.</b>\n\n"
+            f"👥 تعداد کاربران هدف: <b>{len(users)} نفر</b>\n\n"
+            f"آیا برای آغاز ارسال همگانی اطمینان دارید؟",
+            parse_mode='HTML',
+            reply_markup=markup
+        )
+
+    @bot.callback_query_handler(func=lambda call: call.data == "cancel_broadcast" and db_manager.is_admin(call.message.chat.id))
+    def cb_cancel_broadcast(call: CallbackQuery):
+        reset(call.message.chat.id)
+        bot.edit_message_text("❌ عملیات ارسال پیام همگانی لغو شد.", call.message.chat.id, call.message.message_id)
+        bot.answer_callback_query(call.id, "ارسال لغو شد.")
+
+    @bot.callback_query_handler(func=lambda call: call.data == "confirm_broadcast" and db_manager.is_admin(call.message.chat.id))
+    def cb_confirm_broadcast(call: CallbackQuery):
+        data = get_data(call.message.chat.id)
+        target_msg_id = data.get('broadcast_msg_id')
+
+        if not target_msg_id:
+            bot.answer_callback_query(call.id, "پیام منقضی شده است.", show_alert=True)
+            reset(call.message.chat.id)
+            return
+
+        reset(call.message.chat.id)
+        users = db_manager.get_all_users_id()
+        total = len(users)
+
+        if total == 0:
+            bot.edit_message_text("❌ هیچ کاربری در دیتابیس ثبت نشده است.", call.message.chat.id, call.message.message_id)
+            return
+
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        progress_msg = bot.send_message(
+            call.message.chat.id,
+            f"⏳ <b>در حال آغاز ارسال همگانی...</b>\n\n"
+            f"👥 کل مخاطبان: {total}\n"
+            f"✅ موفق: 0\n"
+            f"❌ ناموفق: 0\n"
+            f"📊 پیشرفت: 0%",
+            parse_mode='HTML'
+        )
+        bot.answer_callback_query(call.id, "ارسال همگانی آغاز شد.")
+
+        success_count = 0
+        failed_count = 0
+        start_time = time.time()
+        last_update_time = start_time
+
+        for idx, u_id in enumerate(users, start=1):
+            try:
+                bot.copy_message(
+                    chat_id=u_id,
+                    from_chat_id=call.message.chat.id,
+                    message_id=target_msg_id
+                )
+                success_count += 1
+            except Exception:
+                failed_count += 1
+
+            # به‌روزرسانی زنده وضعیت هر ۳ ثانیه یک‌بار تا مانع از لیمیت شدن ربات توسط تلگرام شود
+            curr_time = time.time()
+            if (curr_time - last_update_time >= 3.0) or (idx == total):
+                percent = int((idx / total) * 100)
+                try:
+                    bot.edit_message_text(
+                        f"⏳ <b>در حال ارسال پیام همگانی...</b>\n\n"
+                        f"📊 پیشرفت: <b>{percent}%</b> ({idx}/{total})\n"
+                        f"✅ ارسال‌های موفق: <b>{success_count}</b>\n"
+                        f"❌ ناموفق (بلاک یا حذف اکانت): <b>{failed_count}</b>",
+                        call.message.chat.id,
+                        progress_msg.message_id,
+                        parse_mode='HTML'
+                    )
+                    last_update_time = curr_time
+                except Exception:
+                    pass
+
+            time.sleep(0.04)
+
+        elapsed = round(time.time() - start_time, 1)
+        success_rate = int((success_count / total * 100)) if total else 0
+
+        # گزارش جامع نهایی
+        report_text = (
+            "📣 <b>گزارش کامل ارسال پیام همگانی</b>\n\n"
+            f"👥 کل کاربران هدف: <b>{total} نفر</b>\n"
+            f"✅ ارسال‌های موفق: <b>{success_count}</b>\n"
+            f"❌ ارسال‌های ناموفق: <b>{failed_count}</b>\n"
+            f"📈 درصد تحویل موفق: <b>{success_rate}%</b>\n"
+            f"⏱ مدت زمان ارسال: <b>{elapsed} ثانیه</b>\n\n"
+            "✨ <i>عملیات ارسال به پایان رسید.</i>"
+        )
+        try:
+            bot.edit_message_text(report_text, call.message.chat.id, progress_msg.message_id, parse_mode='HTML')
+        except Exception:
+            bot.send_message(call.message.chat.id, report_text, parse_mode='HTML')
 
 def send_stats_menu(bot: TeleBot, chat_id, message_id=None):
     total_users = len(db_manager.get_all_users_id())
