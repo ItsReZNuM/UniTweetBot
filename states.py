@@ -1,4 +1,3 @@
-
 class S:
     IDLE = "IDLE"
 
@@ -16,6 +15,7 @@ class S:
     ADMIN_DEL_SHOW_RESULTS = "ADMIN_DEL_SHOW_RESULTS"
     ADMIN_DEL_CONFIRM = "ADMIN_DEL_CONFIRM"
 
+    ADMIN_WAIT_ADD_ID = "ADMIN_WAIT_ADD_ID"
 
 
 user_state = {}

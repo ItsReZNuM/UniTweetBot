@@ -2,13 +2,11 @@ import logging
 from time import time
 from datetime import datetime
 from pytz import timezone
-import config
+from database import db_manager
 
 logger = logging.getLogger(__name__)
 
-# Bot Start Time
 bot_start_time = datetime.now(timezone('Asia/Tehran')).timestamp()
-
 message_tracker = {}
 
 def is_message_valid(message) -> bool:
@@ -20,7 +18,7 @@ def is_message_valid(message) -> bool:
 def check_rate_limit(user_id: int) -> tuple[bool, str]:
     current_time = time()
 
-    if user_id in config.ADMIN_USER_IDS:
+    if db_manager.is_admin(user_id):
         return True, ""
 
     if user_id not in message_tracker:

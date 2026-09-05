@@ -1,7 +1,3 @@
-### This Tweet Bot Has Been coded for LU Uni By ReZNuM
-### Telegram ID : @ItsReZNuM
-### It Has been Opened In Github ...
-
 import telebot
 import logging
 from config import BOT_TOKEN, ADMIN_USER_IDS, ADMIN_ID
@@ -17,23 +13,17 @@ if not BOT_TOKEN:
     logger.error("BOT_TOKEN is not set in .env file.")
     exit()
 
-if ADMIN_ID is None:
-    logger.warning("ADMIN_USER_IDS is not set correctly in .env file. Admin features will be disabled.")
-
 db_manager.init_db()
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
 
-if ADMIN_USER_IDS:
-    user_tweets.register_user_handlers(bot, ADMIN_ID)
-    
-    admin_tweets.register_admin_handlers(bot, ADMIN_ID)
-    
-    admin_panel.register_admin_panel_handlers(bot)
-    
-    job_scheduler.init_scheduler(bot, ADMIN_ID)
-    
+user_tweets.register_user_handlers(bot)
+admin_tweets.register_admin_handlers(bot)
+admin_panel.register_admin_panel_handlers(bot)
 register_chart_handlers(bot)
+
+if ADMIN_ID:
+    job_scheduler.init_scheduler(bot, ADMIN_ID)
 
 logger.info("Bot is starting...")
 

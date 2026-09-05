@@ -2,6 +2,7 @@
 
 import telebot
 from telebot.types import Message, CallbackQuery
+from database import db_manager
 from handlers.chart_keyboards import user_no_result_kb
 from telebot import TeleBot
 
@@ -14,25 +15,18 @@ from handlers.chart_keyboards import (
 )
 from handlers.chart_fuzzy_search import fuzzy_match
 
-# ---------------------------
-# ابزارهای کمکی
-# ---------------------------
-
-
 def register_chart_handlers(bot: TeleBot):
     chart_db.init_db()
     
     def is_admin(user_id: int) -> bool:
-        return user_id == ADMIN_ID
-
+        return db_manager.is_admin(user_id)
 
     def go_home(message_or_call, text: str | None = None):
-
         uid = message_or_call.from_user.id
 
         if is_admin(uid):
             set_state(uid, S.ADMIN_MENU, {})
-            msg = text or "👑 <b>پنل ادمین</b>\n\nیکی از گزینه‌ها رو انتخاب کن:"
+            msg = text or "👑 <b>پنل ادمین چارت‌ها</b>\n\nیکی از گزینه‌ها رو انتخاب کن:"
             if isinstance(message_or_call, CallbackQuery):
                 bot.edit_message_text(msg, chat_id=message_or_call.message.chat.id,
                                     message_id=message_or_call.message.message_id,
@@ -49,16 +43,11 @@ def register_chart_handlers(bot: TeleBot):
             else:
                 bot.send_message(message_or_call.chat.id, msg, reply_markup=back_btn("BACK"))
     
-    # ---------------------------
-    # /start
-    # ---------------------------
-    @bot.message_handler(commands=["start"])
-    def start_cmd(message: Message):
-        if is_admin(message.from_user.id):
-            go_home(message, "👋 سلام ادمین عزیز!\n\n👑 به پنل مدیریت چارت‌ها خوش اومدی.")
-        else:
-            go_home(message, "👋 سلام!\n\n😊 به ربات <b>چارت رشته‌ها</b> خوش اومدی.\n🎓 اسم رشته‌ات رو بنویس تا چارت مربوطه رو برات بیارم.")
-
+    # دکمه منوی اصلی ادمین برای ورود مستقیم به پنل چارت
+    @bot.message_handler(func=lambda m: m.chat.type == "private" and m.text == "👑 پنل مدیریت چارت" and is_admin(m.chat.id))
+    def open_chart_admin_menu(message: Message):
+        set_state(message.chat.id, S.ADMIN_MENU, {})
+        bot.send_message(message.chat.id, "👑 <b>پنل مدیریت چارت</b>\n\nیکی از گزینه‌ها رو انتخاب کن:", reply_markup=admin_menu_kb())
 
     # ---------------------------
     # Callback: BACK و منوها
@@ -66,7 +55,6 @@ def register_chart_handlers(bot: TeleBot):
     @bot.callback_query_handler(func=lambda c: c.data == "BACK")
     def cb_back(call: CallbackQuery):
         go_home(call)
-
 
     @bot.callback_query_handler(func=lambda c: c.data == "A_ADD")
     def cb_admin_add(call: CallbackQuery):
@@ -83,7 +71,6 @@ def register_chart_handlers(bot: TeleBot):
             reply_markup=back_btn("BACK")
         )
 
-
     @bot.callback_query_handler(func=lambda c: c.data == "A_DEL")
     def cb_admin_del(call: CallbackQuery):
         uid = call.from_user.id
@@ -99,25 +86,18 @@ def register_chart_handlers(bot: TeleBot):
             reply_markup=back_btn("BACK")
         )
 
-
     # ---------------------------
-    # سناریوی کاربر: انتخاب رشته
+    # سناریوی انتخاب رشته (مشترک کاربر عادی و ادمین)
     # ---------------------------
     @bot.callback_query_handler(func=lambda c: c.data.startswith("U_PICK:"))
     def cb_user_pick(call: CallbackQuery):
-        uid = call.from_user.id
-        if is_admin(uid):
-            bot.answer_callback_query(call.id, "⚠️ این بخش مخصوص کاربرهاست.")
-            return
-
         chart_id = int(call.data.split(":")[1])
         chart = chart_db.get_chart_by_id(chart_id)
         if not chart:
             bot.answer_callback_query(call.id, "❌ این چارت پیدا نشد.")
-            go_home(call, "❌ چارت مورد نظر پیدا نشد.\n\n🎓 دوباره نام رشته رو وارد کن:")
+            bot.send_message(call.message.chat.id, "❌ چارت مورد نظر پیدا نشد.\n\n🎓 دوباره نام رشته رو وارد کن:")
             return
 
-        # ارسال فایل با copy_message تا نام آپلودکننده نمایش داده نشود ✅
         bot.copy_message(
             chat_id=call.message.chat.id,
             from_chat_id=chart["chat_id"],
@@ -125,17 +105,11 @@ def register_chart_handlers(bot: TeleBot):
         )
 
         bot.answer_callback_query(call.id, "✅ ارسال شد!")
-        go_home(call, "✅ چارت برات ارسال شد.\n\n🎓 اگه رشته‌ی دیگه‌ای می‌خوای، اسمش رو بنویس:")
-
+        bot.send_message(call.message.chat.id, "✅ چارت برات ارسال شد.\n\n🎓 اگه رشته‌ی دیگه‌ای می‌خوای، اسمش رو بنویس:")
 
     @bot.callback_query_handler(func=lambda c: c.data == "U_NOT_MINE")
     def cb_user_not_mine(call: CallbackQuery):
-        uid = call.from_user.id
-        if is_admin(uid):
-            bot.answer_callback_query(call.id, "⚠️ این بخش مخصوص کاربرهاست.")
-            return
-
-        set_state(uid, S.USER_WAIT_MAJOR, {})
+        set_state(call.from_user.id, S.USER_WAIT_MAJOR, {})
         bot.edit_message_text(
             "😕 اشکالی نداره!\n\n🎓 اگه چارت درسیت توی ربات نیست ، میتونی با آیدی ادمین @sedayedaneshjoolu_admin در ارتباط باشی که مشکلت رو برطرف کنه 😊",
             chat_id=call.message.chat.id,
@@ -143,9 +117,8 @@ def register_chart_handlers(bot: TeleBot):
             reply_markup=back_btn("BACK")
         )
 
-
     # ---------------------------
-    # سناریوی ادمین: انتخاب نتیجه برای حذف + تایید
+    # سناریوی ادمین: حذف چارت
     # ---------------------------
     @bot.callback_query_handler(func=lambda c: c.data.startswith("A_DEL_PICK:"))
     def cb_admin_del_pick(call: CallbackQuery):
@@ -170,7 +143,6 @@ def register_chart_handlers(bot: TeleBot):
             reply_markup=confirm_delete_kb(chart_id)
         )
 
-
     @bot.callback_query_handler(func=lambda c: c.data.startswith("A_DEL_YES:"))
     def cb_admin_del_yes(call: CallbackQuery):
         uid = call.from_user.id
@@ -188,7 +160,6 @@ def register_chart_handlers(bot: TeleBot):
             bot.answer_callback_query(call.id, "❌ حذف انجام نشد.")
             go_home(call, "❌ حذف انجام نشد (شاید قبلاً حذف شده).\n\n👑 پنل ادمین:")
 
-
     @bot.callback_query_handler(func=lambda c: c.data == "A_DEL_NO")
     def cb_admin_del_no(call: CallbackQuery):
         uid = call.from_user.id
@@ -199,9 +170,8 @@ def register_chart_handlers(bot: TeleBot):
         bot.answer_callback_query(call.id, "👌 باشه، کنسل شد.")
         go_home(call, "👌 عملیات حذف لغو شد.\n\n👑 پنل ادمین:")
 
-
     # ---------------------------
-    # دریافت پیام‌های متنی (طبق State)
+    # دریافت متن
     # ---------------------------
     @bot.message_handler(func=lambda m: True, content_types=["text"])
     def on_text(message: Message):
@@ -209,19 +179,17 @@ def register_chart_handlers(bot: TeleBot):
         st = get_state(uid)
         txt = message.text.strip()
 
-        # اگر کاربر /start نزده بود هم هدایتش کنیم
         if st == S.IDLE:
             go_home(message)
             return
 
-        # ---------- کاربر عادی: جستجوی رشته ----------
-        if not is_admin(uid) and st == S.USER_WAIT_MAJOR:
+        # جستجوی رشته (هم برای کاربر عادی و هم برای ادمین در حالت دریافت چارت)
+        if st == S.USER_WAIT_MAJOR:
             all_items = chart_db.get_all_for_search()
             results = fuzzy_match(txt, all_items, min_score=MIN_SIMILARITY, limit=10)
 
             if not results:
                 set_state(uid, S.USER_SHOW_RESULTS, {"last_query": txt})
-
                 bot.send_message(
                     message.chat.id,
                     "😕 متأسفانه چارت مشابهی پیدا نکردم.\n\n"
@@ -238,7 +206,7 @@ def register_chart_handlers(bot: TeleBot):
             )
             return
 
-        # ---------- ادمین: اضافه کردن چارت ----------
+        # ادمین: نام رشته برای افزودن چارت
         if is_admin(uid) and st == S.ADMIN_ADD_WAIT_MAJOR:
             update_data(uid, major_name=txt)
             set_state(uid, S.ADMIN_ADD_WAIT_FILE, get_data(uid))
@@ -249,7 +217,7 @@ def register_chart_handlers(bot: TeleBot):
             )
             return
 
-        # ---------- ادمین: حذف چارت (جستجو) ----------
+        # ادمین: جستجوی رشته برای حذف
         if is_admin(uid) and st == S.ADMIN_DEL_WAIT_QUERY:
             all_items = chart_db.get_all_for_search()
             results = fuzzy_match(txt, all_items, min_score=MIN_SIMILARITY, limit=10)
@@ -270,13 +238,8 @@ def register_chart_handlers(bot: TeleBot):
             )
             return
 
-        # اگر در وضعیت دیگری متن فرستاد، به خانه برگردیم
-        go_home(message, "🙂 برای ادامه، از منو استفاده کن یا نام رشته رو وارد کن:")
-        return
-
-
     # ---------------------------
-    # دریافت فایل (ادمین هنگام Add)
+    # دریافت فایل داکیومنت چارت
     # ---------------------------
     @bot.message_handler(content_types=["document"])
     def on_document(message: Message):
@@ -288,7 +251,6 @@ def register_chart_handlers(bot: TeleBot):
             return
 
         if st != S.ADMIN_ADD_WAIT_FILE:
-            bot.send_message(message.chat.id, "🙂 الان در مرحله‌ی دریافت فایل نیستیم. از پنل ادمین شروع کن.", reply_markup=admin_menu_kb())
             return
 
         data = get_data(uid)
@@ -311,6 +273,3 @@ def register_chart_handlers(bot: TeleBot):
             reply_markup=admin_menu_kb()
         )
         set_state(uid, S.ADMIN_MENU, {})
-        return
-
-

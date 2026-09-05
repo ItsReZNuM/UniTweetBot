@@ -1,7 +1,7 @@
 import sqlite3
 import datetime
 import json
-from config import DATABASE_NAME
+from config import DATABASE_NAME, ADMIN_USER_IDS, ADMIN_ID
 
 def get_db_connection():
     conn = sqlite3.connect(DATABASE_NAME)
@@ -29,7 +29,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             text TEXT,
-            status TEXT, -- pending, approved, rejected
+            status TEXT, -- pending, approved, rejected, sent
             approved_hour INTEGER,
             admin_msg_id INTEGER,
             rejection_reason TEXT,
@@ -43,10 +43,123 @@ def init_db():
             tweet_ids TEXT
         )
     """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS admins (
+            id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            added_by INTEGER,
+            added_date TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tweet_admin_messages (
+            tweet_id INTEGER,
+            admin_id INTEGER,
+            message_id INTEGER,
+            PRIMARY KEY (tweet_id, admin_id)
+        )
+    """)
     
+    conn.commit()
+    _migrate_db(conn)
+    conn.close()
+
+def _migrate_db(conn):
+    cursor = conn.cursor()
+    try:
+        # مایگریشن رکوردهای قبلی tweets به جدول tweet_admin_messages
+        if ADMIN_ID:
+            cursor.execute("SELECT id, admin_msg_id FROM tweets WHERE admin_msg_id IS NOT NULL AND admin_msg_id != 0")
+            rows = cursor.fetchall()
+            for r in rows:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO tweet_admin_messages (tweet_id, admin_id, message_id)
+                    VALUES (?, ?, ?)
+                """, (r['id'], ADMIN_ID, r['admin_msg_id']))
+            conn.commit()
+    except Exception:
+        pass
+
+# ====================
+# مدیریت ادمین‌ها
+# ====================
+def is_superadmin(user_id: int) -> bool:
+    return user_id in ADMIN_USER_IDS
+
+def get_db_admins():
+    conn = get_db_connection()
+    rows = conn.execute("SELECT * FROM admins ORDER BY added_date DESC").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def get_all_admins():
+    conn = get_db_connection()
+    rows = conn.execute("SELECT id FROM admins").fetchall()
+    conn.close()
+    db_ids = [r['id'] for r in rows]
+    return list(set(ADMIN_USER_IDS + db_ids))
+
+def is_admin(user_id: int) -> bool:
+    return user_id in get_all_admins()
+
+def add_admin(user_id: int, added_by: int = None, username: str = None, first_name: str = None) -> bool:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        cursor.execute("""
+            INSERT INTO admins (id, username, first_name, added_by, added_date)
+            VALUES (?, ?, ?, ?, ?)
+        """, (user_id, username, first_name, added_by, now))
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.IntegrityError:
+        conn.close()
+        return False
+
+def remove_admin(user_id: int) -> bool:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM admins WHERE id = ?", (user_id,))
+    conn.commit()
+    deleted = cursor.rowcount > 0
+    conn.close()
+    return deleted
+
+# ====================
+# پیام‌های ادمین‌ها برای هر توییت
+# ====================
+def save_tweet_admin_message(tweet_id: int, admin_id: int, message_id: int):
+    conn = get_db_connection()
+    conn.execute("""
+        INSERT OR REPLACE INTO tweet_admin_messages (tweet_id, admin_id, message_id)
+        VALUES (?, ?, ?)
+    """, (tweet_id, admin_id, message_id))
     conn.commit()
     conn.close()
 
+def get_tweet_admin_messages(tweet_id: int):
+    conn = get_db_connection()
+    rows = conn.execute("SELECT admin_id, message_id FROM tweet_admin_messages WHERE tweet_id = ?", (tweet_id,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def get_other_admin_messages(tweet_id: int, current_admin_id: int):
+    conn = get_db_connection()
+    rows = conn.execute("""
+        SELECT admin_id, message_id FROM tweet_admin_messages 
+        WHERE tweet_id = ? AND admin_id != ?
+    """, (tweet_id, current_admin_id)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+# ====================
+# عملیات توییت‌ها و کاربران
+# ====================
 def save_user(user):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -56,6 +169,12 @@ def save_user(user):
                        (user.id, user.first_name, user.username, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     conn.commit()
     conn.close()
+
+def get_user_by_id(user_id):
+    conn = get_db_connection()
+    row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 def get_user_id_by_tweet(tweet_id):
     conn = get_db_connection()
@@ -75,8 +194,7 @@ def get_total_failed_tweets():
     conn.close()
     return row['count'] if row else 0
 
-
-def submit_tweet(user_id, text, admin_msg_id):
+def submit_tweet(user_id, text, admin_msg_id=0):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("INSERT INTO tweets (user_id, text, status, admin_msg_id, submission_date) VALUES (?, ?, 'pending', ?, ?)",
@@ -87,7 +205,11 @@ def submit_tweet(user_id, text, admin_msg_id):
     conn.close()
     return tweet_id
 
-
+def get_tweet_by_id(tweet_id):
+    conn = get_db_connection()
+    tweet = conn.execute("SELECT * FROM tweets WHERE id = ?", (tweet_id,)).fetchone()
+    conn.close()
+    return dict(tweet) if tweet else None
 
 def get_tweet_by_admin_msg_id(admin_msg_id):
     conn = get_db_connection()
@@ -178,52 +300,3 @@ def get_top_users(limit=5):
     ).fetchall()
     conn.close()
     return [{"username": r['username'] or f'کاربر {r["success_tweets"]}', "count": r['success_tweets']} for r in rows]
-
-
-# فصد داشتم فیچر انتقال و حذف ساعت اضافه کنم ، ولی حوصله نداشتم این رو میتونی کلا پاک کنی 
-def remove_schedule_hour(hour_to_remove, hour_to_transfer):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    row = cursor.execute("SELECT tweet_ids FROM scheduler WHERE hour = ?", (hour_to_remove,)).fetchone()
-    removed_ids = []
-
-    # بررسی ایمن‌تر JSON
-    if row and row['tweet_ids']:
-        try:
-            removed_ids = json.loads(row['tweet_ids'])
-        except json.JSONDecodeError:
-            removed_ids = []
-
-    if not removed_ids:
-        conn.execute("DELETE FROM scheduler WHERE hour = ?", (hour_to_remove,))
-        conn.commit()
-        conn.close()
-        return
-
-    # حذف ساعت مبدأ
-    conn.execute("DELETE FROM scheduler WHERE hour = ?", (hour_to_remove,))
-
-    # انتقال به ساعت مقصد
-    placeholders = ','.join(['?'] * len(removed_ids))
-    params = (hour_to_transfer, *removed_ids)
-    conn.execute(f"UPDATE tweets SET approved_hour = ? WHERE id IN ({placeholders})", params)
-
-    # افزودن به ساعت مقصد
-    target_row = cursor.execute("SELECT tweet_ids FROM scheduler WHERE hour = ?", (hour_to_transfer,)).fetchone()
-    target_ids = []
-    if target_row and target_row['tweet_ids']:
-        try:
-            target_ids = json.loads(target_row['tweet_ids'])
-        except json.JSONDecodeError:
-            target_ids = []
-
-    new_ids = list(set(target_ids + removed_ids))
-
-    if target_row:
-        conn.execute("UPDATE scheduler SET tweet_ids = ? WHERE hour = ?", (json.dumps(new_ids), hour_to_transfer))
-    else:
-        conn.execute("INSERT INTO scheduler (hour, tweet_ids) VALUES (?, ?)", (hour_to_transfer, json.dumps(new_ids)))
-
-    conn.commit()
-    conn.close()
