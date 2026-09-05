@@ -16,7 +16,6 @@ def tweet_action_markup(tweet_id):
     return markup
 
 def tweet_done_markup(tweet_id):
-    """کیبورد بعد از تایید یا رد توییت؛ امکان ارسال پیام جداگانه به کاربر همچنان حفظ می‌شود"""
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("↩️ ارسال پیام به کاربر", callback_data=f"reply_{tweet_id}"))
     return markup
@@ -60,6 +59,7 @@ def main_menu_markup(user_id: int):
         )
         markup.add(
             KeyboardButton("👑 پنل مدیریت چارت"),
+            KeyboardButton("💾 مدیریت بکاپ"),
         )
         markup.add(
             KeyboardButton("🐦 ارسال توییت"),
@@ -87,7 +87,7 @@ def main_menu_markup(user_id: int):
     return markup
 
 # ====================
-# کیبوردهای مدیریت ادمین (فقط سوپرادمین)
+# کیبوردهای مدیریت ادمین
 # ====================
 def admin_management_markup():
     markup = InlineKeyboardMarkup(row_width=2)
@@ -116,4 +116,34 @@ def confirm_admin_del_markup(admin_id: int):
         InlineKeyboardButton("❌ خیر", callback_data="admin_del_no"),
     )
     markup.add(InlineKeyboardButton("🔙 بازگشت", callback_data="admin_mgmt_del"))
+    return markup
+
+# ====================
+# کیبوردهای پنل بکاپ
+# ====================
+def backup_menu_markup():
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        InlineKeyboardButton("📥 دریافت آنی دیتابیس‌ها", callback_data="bk_download_now"),
+        InlineKeyboardButton("⚙️ تنظیم ارسال خودکار و مکرر", callback_data="bk_schedule_menu"),
+        InlineKeyboardButton("🔄 بروزرسانی وضعیت و زمان", callback_data="bk_refresh"),
+    )
+    return markup
+
+def backup_schedule_markup():
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("📅 روزانه (۲۴ ساعت)", callback_data="bk_set_daily"),
+        InlineKeyboardButton("🗓️ سه روز یکبار", callback_data="bk_set_3days"),
+    )
+    markup.add(
+        InlineKeyboardButton("📆 هفتگی (۷ روز)", callback_data="bk_set_weekly"),
+        InlineKeyboardButton("🌙 ماهانه (۳۰ روز)", callback_data="bk_set_monthly"),
+    )
+    markup.add(
+        InlineKeyboardButton("❌ غیرفعال کردن ارسال خودکار", callback_data="bk_set_off"),
+    )
+    markup.add(
+        InlineKeyboardButton("🔙 بازگشت به پنل بکاپ", callback_data="bk_back_main"),
+    )
     return markup

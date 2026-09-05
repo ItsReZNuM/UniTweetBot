@@ -33,6 +33,7 @@ def init_db():
             approved_hour INTEGER,
             admin_msg_id INTEGER,
             rejection_reason TEXT,
+            reply_info TEXT,
             submission_date TEXT
         )
     """)
@@ -62,6 +63,14 @@ def init_db():
             PRIMARY KEY (tweet_id, admin_id)
         )
     """)
+
+    # جدول تنظیمات سیستم (برای نگهداری وضعیت زمان‌بندی بکاپ)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
     
     conn.commit()
     _migrate_db(conn)
@@ -70,7 +79,6 @@ def init_db():
 def _migrate_db(conn):
     cursor = conn.cursor()
     try:
-        # مایگریشن رکوردهای قبلی tweets به جدول tweet_admin_messages
         if ADMIN_ID:
             cursor.execute("SELECT id, admin_msg_id FROM tweets WHERE admin_msg_id IS NOT NULL AND admin_msg_id != 0")
             rows = cursor.fetchall()
@@ -82,6 +90,27 @@ def _migrate_db(conn):
             conn.commit()
     except Exception:
         pass
+
+    try:
+        cursor.execute("ALTER TABLE tweets ADD COLUMN reply_info TEXT")
+        conn.commit()
+    except Exception:
+        pass
+
+# ====================
+# مدیریت تنظیمات
+# ====================
+def get_setting(key, default=None):
+    conn = get_db_connection()
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    conn.close()
+    return row['value'] if row else default
+
+def set_setting(key, value):
+    conn = get_db_connection()
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
+    conn.commit()
+    conn.close()
 
 # ====================
 # مدیریت ادمین‌ها
@@ -239,6 +268,12 @@ def reject_tweet(tweet_id, reason):
     conn = get_db_connection()
     conn.execute("UPDATE tweets SET status = 'rejected', rejection_reason = ? WHERE id = ?", (reason, tweet_id))
     conn.execute("UPDATE users SET failed_tweets = failed_tweets + 1 WHERE id = (SELECT user_id FROM tweets WHERE id = ?)", (tweet_id,))
+    conn.commit()
+    conn.close()
+
+def update_tweet_reply(tweet_id, reply_info):
+    conn = get_db_connection()
+    conn.execute("UPDATE tweets SET reply_info = ? WHERE id = ?", (reply_info, tweet_id))
     conn.commit()
     conn.close()
 

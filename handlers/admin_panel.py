@@ -8,8 +8,11 @@ from states import S, set_state, get_state, get_data, reset
 from utils.keyboards import (
     admin_management_markup,
     admin_del_list_markup,
-    confirm_admin_del_markup
+    confirm_admin_del_markup,
+    backup_menu_markup,
+    backup_schedule_markup
 )
+from utils import job_scheduler
 
 SEPARATOR = "\n\n✎﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏\n\n"
 MAX_TG_MSG_LEN = 4096
@@ -50,6 +53,17 @@ def _chunk_and_send_preview(bot: TeleBot, chat_id: int, full_text: str, reply_to
     for idx, p in enumerate(parts, 1):
         prefix = "" if idx == 1 else f"(بخش {idx} از {len(parts)})\n\n"
         bot.send_message(chat_id, prefix + p, parse_mode='HTML')
+
+def _format_backup_panel_text():
+    info = job_scheduler.get_backup_status()
+    text = (
+        "💾 <b>پنل مدیریت پشتیبان‌گیری دیتابیس</b>\n\n"
+        f"⚙️ <b>وضعیت ارسال مکرر:</b> {info['status_fa']}\n"
+        f"⏳ <b>زمان مانده تا ارسال بعدی:</b> {info['remaining_fa']}\n"
+        f"📅 <b>موعد ارسال بعدی:</b> <code>{info['next_run_fa']}</code>\n\n"
+        "یکی از عملیات‌های زیر را انتخاب کنید:"
+    )
+    return text
 
 def register_admin_panel_handlers(bot: TeleBot):
 
@@ -283,7 +297,7 @@ def register_admin_panel_handlers(bot: TeleBot):
             bot.send_message(message.chat.id, "❌ مشکلی در افزودن ادمین رخ داد.")
 
     # =====================================================
-    # هندلرهای پیام همگانی (برای تمام ادمین‌ها)
+    # هندلرهای پیام همگانی
     # =====================================================
     @bot.message_handler(func=lambda m: db_manager.is_admin(m.chat.id) and m.text == "📣 پیام همگانی")
     @bot.message_handler(commands=['broadcast'])
@@ -375,7 +389,6 @@ def register_admin_panel_handlers(bot: TeleBot):
             except Exception:
                 failed_count += 1
 
-            # به‌روزرسانی زنده وضعیت هر ۳ ثانیه یک‌بار تا مانع از لیمیت شدن ربات توسط تلگرام شود
             curr_time = time.time()
             if (curr_time - last_update_time >= 3.0) or (idx == total):
                 percent = int((idx / total) * 100)
@@ -398,7 +411,6 @@ def register_admin_panel_handlers(bot: TeleBot):
         elapsed = round(time.time() - start_time, 1)
         success_rate = int((success_count / total * 100)) if total else 0
 
-        # گزارش جامع نهایی
         report_text = (
             "📣 <b>گزارش کامل ارسال پیام همگانی</b>\n\n"
             f"👥 کل کاربران هدف: <b>{total} نفر</b>\n"
@@ -412,6 +424,76 @@ def register_admin_panel_handlers(bot: TeleBot):
             bot.edit_message_text(report_text, call.message.chat.id, progress_msg.message_id, parse_mode='HTML')
         except Exception:
             bot.send_message(call.message.chat.id, report_text, parse_mode='HTML')
+
+    # =====================================================
+    # هندلرهای سیستم پشتیبان‌گیری (بکاپ)
+    # =====================================================
+    @bot.message_handler(func=lambda m: db_manager.is_superadmin(m.chat.id) and m.text == "💾 مدیریت بکاپ")
+    def handle_backup_menu(message: Message):
+        bot.send_message(
+            message.chat.id,
+            _format_backup_panel_text(),
+            parse_mode='HTML',
+            reply_markup=backup_menu_markup()
+        )
+
+    @bot.callback_query_handler(func=lambda call: call.data == "bk_refresh" and db_manager.is_superadmin(call.message.chat.id))
+    def cb_backup_refresh(call: CallbackQuery):
+        bot.edit_message_text(
+            _format_backup_panel_text(),
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode='HTML',
+            reply_markup=backup_menu_markup()
+        )
+        bot.answer_callback_query(call.id, "وضعیت به‌روزرسانی شد.")
+
+    @bot.callback_query_handler(func=lambda call: call.data == "bk_download_now" and db_manager.is_superadmin(call.message.chat.id))
+    def cb_backup_download_now(call: CallbackQuery):
+        bot.answer_callback_query(call.id, "⏳ در حال آماده‌سازی و ارسال دیتابیس‌ها...")
+        ok = job_scheduler.send_backup_files(bot, call.message.chat.id)
+        if ok:
+            bot.send_message(call.message.chat.id, "✅ فایل‌های دیتابیس با موفقیت برای شما ارسال شد.")
+        else:
+            bot.send_message(call.message.chat.id, "⚠️ خطایی در ارسال فایل‌های دیتابیس رخ داد.")
+
+    @bot.callback_query_handler(func=lambda call: call.data == "bk_schedule_menu" and db_manager.is_superadmin(call.message.chat.id))
+    def cb_backup_schedule_menu(call: CallbackQuery):
+        bot.edit_message_text(
+            "⚙️ <b>تنظیم ارسال دوره‌ای و مکرر دیتابیس</b>\n\n"
+            "لطفاً بازه زمانی مورد نظرتان را برای ارسال خودکار دیتابیس انتخاب کنید:\n"
+            "<i>(در موعد مقرر، دیتابیس‌ها مستقیماً به پیوی ادمین اصلی فرستاده می‌شوند)</i>",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode='HTML',
+            reply_markup=backup_schedule_markup()
+        )
+        bot.answer_callback_query(call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("bk_set_") and db_manager.is_superadmin(call.message.chat.id))
+    def cb_backup_set_interval(call: CallbackQuery):
+        interval_type = call.data.replace("bk_set_", "")
+        job_scheduler.update_backup_schedule(bot, interval_type)
+
+        bot.answer_callback_query(call.id, "✅ تنظیمات زمان‌بندی اعمال شد.")
+        bot.edit_message_text(
+            _format_backup_panel_text(),
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode='HTML',
+            reply_markup=backup_menu_markup()
+        )
+
+    @bot.callback_query_handler(func=lambda call: call.data == "bk_back_main" and db_manager.is_superadmin(call.message.chat.id))
+    def cb_backup_back_main(call: CallbackQuery):
+        bot.edit_message_text(
+            _format_backup_panel_text(),
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode='HTML',
+            reply_markup=backup_menu_markup()
+        )
+        bot.answer_callback_query(call.id)
 
 def send_stats_menu(bot: TeleBot, chat_id, message_id=None):
     total_users = len(db_manager.get_all_users_id())

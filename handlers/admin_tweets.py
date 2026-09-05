@@ -1,5 +1,6 @@
 import os
 import tempfile
+import datetime
 from telebot import TeleBot
 from telebot.types import CallbackQuery, Message
 from database import db_manager
@@ -43,7 +44,7 @@ def _hide_tweet_from_other_admins(bot: TeleBot, tweet_id: int, current_admin_id:
 def _refresh_admin_message(bot: TeleBot, admin_chat_id: int, tweet_id: int, message_id: int = None):
     conn = db_manager.get_db_connection()
     tweet = conn.execute("""
-        SELECT user_id, text, status, approved_hour, admin_msg_id, rejection_reason
+        SELECT user_id, text, status, approved_hour, admin_msg_id, rejection_reason, reply_info
         FROM tweets WHERE id = ?
     """, (tweet_id,)).fetchone()
     conn.close()
@@ -55,10 +56,12 @@ def _refresh_admin_message(bot: TeleBot, admin_chat_id: int, tweet_id: int, mess
     if not target_msg_id:
         return
 
-    # مشخصات کامل توییت حفظ می‌شود
     base = _format_admin_tweet_message(tweet["user_id"], tweet["text"])
 
-    # وضعیت تایید یا رد همراه با جزئیات کامل در انتهای پیام
+    # نمایش پاسخ ثبت‌شده ادمین
+    if tweet["reply_info"]:
+        base += f"\n\n💬 <b>پاسخ ارسال‌شده به کاربر:</b>\n«{tweet['reply_info']}»"
+
     if tweet["status"] == "approved":
         base += (
             f"\n\n━━━━━━━━━━━━━━━━━━━━\n"
@@ -234,7 +237,7 @@ def register_admin_handlers(bot: TeleBot):
             _hide_tweet_from_other_admins(bot, tweet_id, call.message.chat.id)
 
         elif data == 'reply':
-            bot.send_message(
+            prompt_msg = bot.send_message(
                 call.message.chat.id,
                 "↩️ هر متن یا مدیایی که می‌خواهید به کاربر ارسال کنید، بفرستید:",
                 parse_mode='HTML'
@@ -243,7 +246,8 @@ def register_admin_handlers(bot: TeleBot):
                 'mode': 'awaiting_reply_content',
                 'tweet_id': tweet_id,
                 'user_id': tweet['user_id'],
-                'origin_msg_id': origin_msg_id
+                'origin_msg_id': origin_msg_id,
+                'prompt_msg_id': prompt_msg.message_id
             }
 
         elif data == 'edit':
@@ -289,7 +293,7 @@ def register_admin_handlers(bot: TeleBot):
 
     @bot.message_handler(
         func=lambda m: db_manager.is_admin(m.chat.id) and m.chat.id in STATE,
-        content_types=['text', 'photo', 'video', 'document', 'audio', 'voice', 'animation']
+        content_types=['text', 'photo', 'video', 'document', 'audio', 'voice', 'animation', 'sticker']
     )
     def handle_admin_input(message: Message):
         state = STATE.get(message.chat.id)
@@ -323,7 +327,45 @@ def register_admin_handlers(bot: TeleBot):
             _hide_tweet_from_other_admins(bot, tweet_id, message.chat.id)
 
         elif state['mode'] == 'awaiting_reply_content':
-            _send_media_to_user(bot, state['user_id'], message)
+            sent_ok = _send_media_to_user(bot, state['user_id'], message)
+            if sent_ok:
+                if message.text:
+                    reply_desc = message.text
+                elif message.caption:
+                    content_fa = {
+                        'photo': 'تصویر',
+                        'video': 'ویدیو',
+                        'document': 'فایل',
+                        'audio': 'صوت',
+                        'voice': 'ویس'
+                    }.get(message.content_type, 'مدیا')
+                    reply_desc = f"[{content_fa}] {message.caption}"
+                else:
+                    content_fa = {
+                        'photo': 'تصویر',
+                        'video': 'ویدیو',
+                        'document': 'فایل',
+                        'audio': 'صوت',
+                        'voice': 'پیام صوتی',
+                        'sticker': 'استیکر',
+                        'animation': 'گیف'
+                    }.get(message.content_type, 'مدیا')
+                    reply_desc = f"[{content_fa} ارسال شد]"
+
+                time_now = datetime.datetime.now().strftime("%H:%M")
+                reply_summary = f"{reply_desc}  (ساعت {time_now})"
+
+                db_manager.update_tweet_reply(state['tweet_id'], reply_summary)
+                origin_msg_id = state.get('origin_msg_id')
+                _refresh_admin_message(bot, message.chat.id, state['tweet_id'], origin_msg_id)
+
+            prompt_msg_id = state.get('prompt_msg_id')
+            if prompt_msg_id:
+                try:
+                    bot.delete_message(message.chat.id, prompt_msg_id)
+                except Exception:
+                    pass
+
             STATE.pop(message.chat.id, None)
 
         elif state['mode'] == 'editing':
