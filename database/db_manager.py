@@ -34,6 +34,7 @@ def init_db():
             admin_msg_id INTEGER,
             rejection_reason TEXT,
             reply_info TEXT,
+            handled_by TEXT,
             submission_date TEXT
         )
     """)
@@ -64,7 +65,6 @@ def init_db():
         )
     """)
 
-    # جدول تنظیمات سیستم (برای نگهداری وضعیت زمان‌بندی بکاپ)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
@@ -93,6 +93,13 @@ def _migrate_db(conn):
 
     try:
         cursor.execute("ALTER TABLE tweets ADD COLUMN reply_info TEXT")
+        conn.commit()
+    except Exception:
+        pass
+
+    # مایگریشن خودکار برای ستون ادمینِ اقدام‌کننده
+    try:
+        cursor.execute("ALTER TABLE tweets ADD COLUMN handled_by TEXT")
         conn.commit()
     except Exception:
         pass
@@ -246,9 +253,9 @@ def get_tweet_by_admin_msg_id(admin_msg_id):
     conn.close()
     return dict(tweet) if tweet else None
 
-def approve_tweet(tweet_id, hour):
+def approve_tweet(tweet_id, hour, handled_by=None):
     conn = get_db_connection()
-    conn.execute("UPDATE tweets SET status = 'approved', approved_hour = ? WHERE id = ?", (hour, tweet_id))
+    conn.execute("UPDATE tweets SET status = 'approved', approved_hour = ?, handled_by = ? WHERE id = ?", (hour, handled_by, tweet_id))
     
     cursor = conn.cursor()
     cursor.execute("SELECT tweet_ids FROM scheduler WHERE hour = ?", (hour,))
@@ -264,22 +271,28 @@ def approve_tweet(tweet_id, hour):
     conn.commit()
     conn.close()
 
-def reject_tweet(tweet_id, reason):
+def reject_tweet(tweet_id, reason, handled_by=None):
     conn = get_db_connection()
-    conn.execute("UPDATE tweets SET status = 'rejected', rejection_reason = ? WHERE id = ?", (reason, tweet_id))
+    conn.execute("UPDATE tweets SET status = 'rejected', rejection_reason = ?, handled_by = ? WHERE id = ?", (reason, handled_by, tweet_id))
     conn.execute("UPDATE users SET failed_tweets = failed_tweets + 1 WHERE id = (SELECT user_id FROM tweets WHERE id = ?)", (tweet_id,))
     conn.commit()
     conn.close()
 
-def update_tweet_reply(tweet_id, reply_info):
+def update_tweet_reply(tweet_id, reply_info, handled_by=None):
     conn = get_db_connection()
-    conn.execute("UPDATE tweets SET reply_info = ? WHERE id = ?", (reply_info, tweet_id))
+    if handled_by:
+        conn.execute("UPDATE tweets SET reply_info = ?, handled_by = ? WHERE id = ?", (reply_info, handled_by, tweet_id))
+    else:
+        conn.execute("UPDATE tweets SET reply_info = ? WHERE id = ?", (reply_info, tweet_id))
     conn.commit()
     conn.close()
 
-def update_tweet_text(tweet_id, new_text):
+def update_tweet_text(tweet_id, new_text, handled_by=None):
     conn = get_db_connection()
-    conn.execute("UPDATE tweets SET text = ? WHERE id = ?", (new_text, tweet_id))
+    if handled_by:
+        conn.execute("UPDATE tweets SET text = ?, handled_by = ? WHERE id = ?", (new_text, handled_by, tweet_id))
+    else:
+        conn.execute("UPDATE tweets SET text = ? WHERE id = ?", (new_text, tweet_id))
     conn.commit()
     conn.close()
 

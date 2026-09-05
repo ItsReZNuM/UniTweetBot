@@ -17,6 +17,13 @@ STATE = {}
 TEMP_DIR = os.path.join(tempfile.gettempdir(), "tweet_bot_temp")
 os.makedirs(TEMP_DIR, exist_ok=True)
 
+def _get_admin_tag(user) -> str:
+    """دریافت تگ ادمین (یوزرنیم یا نام کاربری)"""
+    if user.username:
+        return f"@{user.username}"
+    full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+    return full_name if full_name else f"ادمین ({user.id})"
+
 def _format_admin_tweet_message(user_id: int, tweet_text: str) -> str:
     conn = db_manager.get_db_connection()
     row = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
@@ -24,48 +31,27 @@ def _format_admin_tweet_message(user_id: int, tweet_text: str) -> str:
     username = row["username"] if row and row["username"] else user_id
     return f"<b>✨ توییت جدید</b> از کاربر: @{username}\n\n{tweet_text}"
 
-def _hide_tweet_from_other_admins(bot: TeleBot, tweet_id: int, current_admin_id: int):
-    other_msgs = db_manager.get_other_admin_messages(tweet_id, current_admin_id)
-    for item in other_msgs:
-        try:
-            bot.delete_message(item['admin_id'], item['message_id'])
-        except Exception:
-            try:
-                bot.edit_message_text(
-                    "⚠️ <i>این توییت توسط ادمین دیگری بررسی و تعیین تکلیف شد.</i>",
-                    item['admin_id'],
-                    item['message_id'],
-                    parse_mode="HTML",
-                    reply_markup=None
-                )
-            except Exception:
-                pass
-
-def _refresh_admin_message(bot: TeleBot, admin_chat_id: int, tweet_id: int, message_id: int = None):
-    conn = db_manager.get_db_connection()
-    tweet = conn.execute("""
-        SELECT user_id, text, status, approved_hour, admin_msg_id, rejection_reason, reply_info
-        FROM tweets WHERE id = ?
-    """, (tweet_id,)).fetchone()
-    conn.close()
-
+def _refresh_all_admin_messages(bot: TeleBot, tweet_id: int):
+    """
+    پیام توییت را در چت تمامی ادمین‌ها به‌روزرسانی می‌کند و نشان می‌دهد
+    کدام ادمین توییت را تایید، رد یا ویرایش کرده است.
+    """
+    tweet = db_manager.get_tweet_by_id(tweet_id)
     if not tweet:
-        return
-
-    target_msg_id = message_id or tweet["admin_msg_id"]
-    if not target_msg_id:
         return
 
     base = _format_admin_tweet_message(tweet["user_id"], tweet["text"])
 
-    # نمایش پاسخ ثبت‌شده ادمین
-    if tweet["reply_info"]:
+    if tweet.get("reply_info"):
         base += f"\n\n💬 <b>پاسخ ارسال‌شده به کاربر:</b>\n«{tweet['reply_info']}»"
+
+    handled_by = tweet.get("handled_by")
+    handled_str = f" (توسط {handled_by})" if handled_by else ""
 
     if tweet["status"] == "approved":
         base += (
             f"\n\n━━━━━━━━━━━━━━━━━━━━\n"
-            f"<b>وضعیت:</b> ✅ تأیید شد\n"
+            f"<b>وضعیت:</b> ✅ تأیید شد{handled_str}\n"
             f"🕒 <b>ساعت انتشار:</b> {tweet['approved_hour']}:00 ⏰"
         )
         reply_kb = tweet_done_markup(tweet_id)
@@ -73,7 +59,7 @@ def _refresh_admin_message(bot: TeleBot, admin_chat_id: int, tweet_id: int, mess
         reason = tweet["rejection_reason"] or "دلیلی ثبت نشده است."
         base += (
             f"\n\n━━━━━━━━━━━━━━━━━━━━\n"
-            f"<b>وضعیت:</b> ❌ رد شد\n"
+            f"<b>وضعیت:</b> ❌ رد شد{handled_str}\n"
             f"✍️ <b>دلیل رد:</b> {reason}"
         )
         reply_kb = tweet_done_markup(tweet_id)
@@ -81,16 +67,47 @@ def _refresh_admin_message(bot: TeleBot, admin_chat_id: int, tweet_id: int, mess
         base += f"\n\n━━━━━━━━━━━━━━━━━━━━\n<b>وضعیت:</b> 📤 در کانال ارسال شد"
         reply_kb = None
     else:
+        # در حالت pending اگر متن ویرایش شده باشد، ثبت می‌شود
+        if handled_by:
+            base += f"\n\n━━━━━━━━━━━━━━━━━━━━\n✏️ <b>آخرین ویرایش:</b> توسط {handled_by}"
         reply_kb = tweet_action_markup(tweet_id)
 
+    # ادیت پیام در صفحه تمام ادمین‌هایی که این توییت برایشان ارسال شده بود
+    admin_messages = db_manager.get_tweet_admin_messages(tweet_id)
+    for adm in admin_messages:
+        try:
+            bot.edit_message_text(
+                base,
+                adm["admin_id"],
+                adm["message_id"],
+                parse_mode="HTML",
+                reply_markup=reply_kb
+            )
+        except Exception:
+            pass
+
+def _refresh_single_admin_message(bot: TeleBot, admin_chat_id: int, tweet_id: int, message_id: int):
+    """به‌روزرسانی موقت پیام برای همان ادمین در حین کار با دکمه‌ها"""
+    tweet = db_manager.get_tweet_by_id(tweet_id)
+    if not tweet:
+        return
+
+    base = _format_admin_tweet_message(tweet["user_id"], tweet["text"])
+    if tweet.get("reply_info"):
+        base += f"\n\n💬 <b>پاسخ ارسال‌شده به کاربر:</b>\n«{tweet['reply_info']}»"
+
+    handled_str = f" (توسط {tweet['handled_by']})" if tweet.get("handled_by") else ""
+    if tweet["status"] == "approved":
+        base += f"\n\n━━━━━━━━━━━━━━━━━━━━\n<b>وضعیت:</b> ✅ تأیید شد{handled_str}\n🕒 ساعت ارسال: {tweet['approved_hour']}:00"
+        kb = tweet_done_markup(tweet_id)
+    elif tweet["status"] == "rejected":
+        base += f"\n\n━━━━━━━━━━━━━━━━━━━━\n<b>وضعیت:</b> ❌ رد شد{handled_str}\n✍️ دلیل رد: {tweet['rejection_reason']}"
+        kb = tweet_done_markup(tweet_id)
+    else:
+        kb = tweet_action_markup(tweet_id)
+
     try:
-        bot.edit_message_text(
-            base,
-            admin_chat_id,
-            target_msg_id,
-            parse_mode="HTML",
-            reply_markup=reply_kb
-        )
+        bot.edit_message_text(base, admin_chat_id, message_id, parse_mode="HTML", reply_markup=kb)
     except Exception:
         pass
 
@@ -130,19 +147,16 @@ def register_admin_handlers(bot: TeleBot):
             tweet = db_manager.get_tweet_by_id(tweet_id)
             if not tweet:
                 bot.answer_callback_query(call.id, "توییت یافت نشد.", show_alert=True)
-                try:
-                    bot.delete_message(call.message.chat.id, origin_msg_id)
-                except Exception:
-                    pass
                 return
 
+            # در صورتی که توییت قبلاً توسط ادمین دیگری رد یا تایید شده باشد
             if tweet['status'] in ['approved', 'rejected', 'sent'] and not data.startswith(('reply', 'cancel')):
-                bot.answer_callback_query(call.id, "⚠️ این توییت قبلاً توسط ادمین دیگری بررسی شده است.", show_alert=True)
-                try:
-                    bot.delete_message(call.message.chat.id, origin_msg_id)
-                except Exception:
-                    bot.edit_message_reply_markup(call.message.chat.id, origin_msg_id, reply_markup=None)
+                handled_by = tweet.get("handled_by") or "ادمین دیگری"
+                bot.answer_callback_query(call.id, f"⚠️ این توییت قبلاً توسط {handled_by} بررسی شده است.", show_alert=True)
+                _refresh_all_admin_messages(bot, tweet_id)
                 return
+
+        admin_tag = _get_admin_tag(call.from_user)
 
         if data == 'reject':
             bot.edit_message_text(
@@ -156,14 +170,7 @@ def register_admin_handlers(bot: TeleBot):
 
         elif data.startswith('cancel'):
             STATE.pop(call.message.chat.id, None)
-            base = _format_admin_tweet_message(tweet['user_id'], tweet['text'])
-            bot.edit_message_text(
-                base,
-                call.message.chat.id,
-                origin_msg_id,
-                parse_mode='HTML',
-                reply_markup=tweet_action_markup(tweet_id)
-            )
+            _refresh_single_admin_message(bot, call.message.chat.id, tweet_id, origin_msg_id)
 
         elif data == 'confirm' and arg.startswith('reject'):
             bot.edit_message_text(
@@ -209,19 +216,17 @@ def register_admin_handlers(bot: TeleBot):
                 return
 
             tweet_id = state['tweet_id']
-            saved_origin_msg_id = state.get('origin_msg_id', origin_msg_id)
-
             tweet = db_manager.get_tweet_by_id(tweet_id)
+
             if not tweet or tweet['status'] in ['approved', 'rejected', 'sent']:
-                bot.answer_callback_query(call.id, "⚠️ این توییت قبلاً توسط ادمین دیگری تعیین تکلیف شده است.", show_alert=True)
-                try:
-                    bot.delete_message(call.message.chat.id, saved_origin_msg_id)
-                except Exception:
-                    pass
+                handled_by = tweet.get("handled_by") or "ادمین دیگری"
+                bot.answer_callback_query(call.id, f"⚠️ این توییت قبلاً توسط {handled_by} تعیین تکلیف شده است.", show_alert=True)
+                _refresh_all_admin_messages(bot, tweet_id)
                 STATE.pop(call.message.chat.id, None)
                 return
 
-            db_manager.approve_tweet(tweet_id, hour)
+            # تایید توییت و ثبت تگ ادمین
+            db_manager.approve_tweet(tweet_id, hour, handled_by=admin_tag)
 
             try:
                 bot.send_message(
@@ -233,8 +238,8 @@ def register_admin_handlers(bot: TeleBot):
                 pass
 
             STATE.pop(call.message.chat.id, None)
-            _refresh_admin_message(bot, call.message.chat.id, tweet_id, saved_origin_msg_id)
-            _hide_tweet_from_other_admins(bot, tweet_id, call.message.chat.id)
+            # نمایش و ثبت تایید برای تمام ادمین‌ها
+            _refresh_all_admin_messages(bot, tweet_id)
 
         elif data == 'reply':
             prompt_msg = bot.send_message(
@@ -271,23 +276,15 @@ def register_admin_handlers(bot: TeleBot):
                 bot.answer_callback_query(call.id, "ابتدا متن جدید را ارسال کنید.")
                 return
 
-            saved_origin_msg_id = state.get('origin_msg_id', origin_msg_id)
-            db_manager.update_tweet_text(tweet_id, state['new_text'])
+            db_manager.update_tweet_text(tweet_id, state['new_text'], handled_by=admin_tag)
             STATE.pop(call.message.chat.id, None)
 
-            _refresh_admin_message(bot, call.message.chat.id, tweet_id, saved_origin_msg_id)
-            _hide_tweet_from_other_admins(bot, tweet_id, call.message.chat.id)
+            # ویرایش پیام توییت و نمایش نام ویرایش‌کننده برای تمام ادمین‌ها
+            _refresh_all_admin_messages(bot, tweet_id)
 
         elif data == 'back' and arg.startswith('to_actions'):
             STATE.pop(call.message.chat.id, None)
-            base = _format_admin_tweet_message(tweet['user_id'], tweet['text'])
-            bot.edit_message_text(
-                base,
-                call.message.chat.id,
-                origin_msg_id,
-                parse_mode='HTML',
-                reply_markup=tweet_action_markup(tweet_id)
-            )
+            _refresh_single_admin_message(bot, call.message.chat.id, tweet_id, origin_msg_id)
 
         bot.answer_callback_query(call.id)
 
@@ -300,13 +297,15 @@ def register_admin_handlers(bot: TeleBot):
         if not state:
             return
 
+        admin_tag = _get_admin_tag(message.from_user)
+
         if state['mode'] == 'awaiting_rejection_reason':
             reason = message.text
             tweet_id = state['tweet_id']
             user_id = state['user_id']
-            origin_msg_id = state.get('origin_msg_id')
 
-            db_manager.reject_tweet(tweet_id, reason)
+            # ثبت رد شدن با ذکر نام ادمین
+            db_manager.reject_tweet(tweet_id, reason, handled_by=admin_tag)
 
             try:
                 bot.send_message(
@@ -323,8 +322,8 @@ def register_admin_handlers(bot: TeleBot):
             except Exception:
                 pass
 
-            _refresh_admin_message(bot, message.chat.id, tweet_id, origin_msg_id)
-            _hide_tweet_from_other_admins(bot, tweet_id, message.chat.id)
+            # نمایش دلیل رد و نام ادمین برای تمام ادمین‌ها
+            _refresh_all_admin_messages(bot, tweet_id)
 
         elif state['mode'] == 'awaiting_reply_content':
             sent_ok = _send_media_to_user(bot, state['user_id'], message)
@@ -353,11 +352,11 @@ def register_admin_handlers(bot: TeleBot):
                     reply_desc = f"[{content_fa} ارسال شد]"
 
                 time_now = datetime.datetime.now().strftime("%H:%M")
-                reply_summary = f"{reply_desc}  (ساعت {time_now})"
+                reply_summary = f"{reply_desc} (توسط {admin_tag} در ساعت {time_now})"
 
-                db_manager.update_tweet_reply(state['tweet_id'], reply_summary)
-                origin_msg_id = state.get('origin_msg_id')
-                _refresh_admin_message(bot, message.chat.id, state['tweet_id'], origin_msg_id)
+                db_manager.update_tweet_reply(state['tweet_id'], reply_summary, handled_by=admin_tag)
+                # نمایش پاسخ ارسال‌شده برای تمام ادمین‌ها
+                _refresh_all_admin_messages(bot, state['tweet_id'])
 
             prompt_msg_id = state.get('prompt_msg_id')
             if prompt_msg_id:
@@ -378,14 +377,10 @@ def register_admin_handlers(bot: TeleBot):
             origin_msg_id = state.get('origin_msg_id')
             tweet_id = state['tweet_id']
 
-            conn = db_manager.get_db_connection()
-            row = conn.execute("SELECT user_id, text FROM tweets WHERE id = ?", (tweet_id,)).fetchone()
-            conn.close()
-
-            if row and origin_msg_id:
+            if origin_msg_id:
                 bot.edit_message_text(
-                    f"📝 <b>متن جدید</b>:\n\n<code>{message.text}</code>\n\n"
-                    "برای اعمال تغییر، دکمه «تایید ویرایش» را بزنید.",
+                    f"📝 <b>متن جدید پیشنهادی</b>:\n\n<code>{message.text}</code>\n\n"
+                    "برای اعمال تغییر و نمایش به سایر ادمین‌ها، دکمه «تایید ویرایش» را بزنید.",
                     message.chat.id,
                     origin_msg_id,
                     parse_mode='HTML',
