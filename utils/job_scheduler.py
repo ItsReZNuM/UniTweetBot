@@ -24,18 +24,30 @@ INTERVAL_MAP = {
     'monthly': ('ماهانه (هر ۳۰ روز)', {'days': 30}),
 }
 
+def resync_tweet_schedule(bot: TeleBot, admin_id: int):
+    hours = db_manager.get_all_scheduler_hours()
+    try:
+        old = scheduler.get_job("scheduled_tweet_job")
+        if old:
+            scheduler.remove_job("scheduled_tweet_job")
+    except Exception:
+        pass
+    if not hours:
+        return
+    scheduler.add_job(
+        send_scheduled_tweets,
+        CronTrigger(minute=0, hour=','.join(map(str, hours))),
+        args=[bot, admin_id],
+        id="scheduled_tweet_job",
+        replace_existing=True
+    )
+
 def init_scheduler(bot: TeleBot, admin_id: int):
     db_hours = db_manager.get_all_scheduler_hours()
     for hour in DEFAULT_TWEET_HOURS:
         if hour not in db_hours:
             db_manager.add_schedule_hour(hour)
-            
-    scheduler.add_job(
-        send_scheduled_tweets,
-        CronTrigger(minute=0, hour=','.join(map(str, DEFAULT_TWEET_HOURS))),
-        args=[bot, admin_id],
-        id="scheduled_tweet_job"
-    )
+    resync_tweet_schedule(bot, admin_id)
 
     # راه‌اندازی جاب بکاپ در زمان استارت ربات طبق تنظیمات ذخیره شده
     init_backup_scheduler(bot)

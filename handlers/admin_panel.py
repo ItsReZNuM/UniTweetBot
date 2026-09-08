@@ -3,14 +3,21 @@ import time
 from telebot import TeleBot
 from telebot.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from database import db_manager
-from config import CHANNEL_USERNAME
+from config import CHANNEL_USERNAME, ADMIN_ID
 from states import S, set_state, get_state, get_data, reset
 from utils.keyboards import (
     admin_management_markup,
     admin_del_list_markup,
     confirm_admin_del_markup,
     backup_menu_markup,
-    backup_schedule_markup
+    backup_schedule_markup,
+    schedule_main_markup,
+    schedule_preview_markup,
+    schedule_hours_grid,
+    schedule_add_markup,
+    schedule_del_pick_markup,
+    schedule_del_move_target_markup,
+    schedule_del_confirm_markup,
 )
 from utils import job_scheduler
 
@@ -65,6 +72,21 @@ def _format_backup_panel_text():
     )
     return text
 
+def _format_schedule_main_text(hours: list) -> str:
+    if not hours:
+        return (
+            "⏰ <b>مدیریت ساعت‌های ارسال توییت ✨</b>\n\n"
+            "📭 هنوز هیچ ساعتی تعریف نشده است.\n"
+            "با دکمه «➕ افزودن ساعت» اولین ساعت را اضافه کنید 👇"
+        )
+    hours_sorted = sorted(hours)
+    hours_str = "\n".join([f"  • ⏰ <code>{h:02d}:00</code>" for h in hours_sorted])
+    return (
+        "⏰ <b>مدیریت ساعت‌های ارسال توییت ✨</b>\n\n"
+        f"📋 <b>ساعت‌های فعال ({len(hours_sorted)}):</b>\n{hours_str}\n\n"
+        "👇 یکی از گزینه‌های زیر را انتخاب کنید:"
+    )
+
 def register_admin_panel_handlers(bot: TeleBot):
 
     @bot.message_handler(commands=['admin'])
@@ -79,14 +101,24 @@ def register_admin_panel_handlers(bot: TeleBot):
 
     @bot.message_handler(func=lambda m: db_manager.is_admin(m.chat.id) and m.text in ["📊 مشاهده آمار", "⏰ ساعات توییت"])
     def handle_admin_keyboard(message: Message):
+        # خروج از حالت‌های انتظاری مثل TWEET_MODE
+        if get_state(message.chat.id) in [S.TWEET_MODE, S.USER_WAIT_MAJOR, S.USER_SHOW_RESULTS]:
+            reset(message.chat.id)
+        try:
+            from handlers.admin_tweets import STATE as _ats
+            _ats.pop(message.chat.id, None)
+        except Exception:
+            pass
         if message.text == "📊 مشاهده آمار":
             send_stats_menu(bot, message.chat.id)
         elif message.text == "⏰ ساعات توییت":
             hours = db_manager.get_all_scheduler_hours()
-            if not hours:
-                bot.send_message(message.chat.id, "⏰ هنوز ساعتی تعریف نشده است.")
-                return
-            bot.send_message(message.chat.id, "⏰ یکی از ساعت‌ها را برای <b>پیش‌نمایش</b> انتخاب کنید:", reply_markup=_hours_list_markup(hours), parse_mode='HTML')
+            bot.send_message(
+                message.chat.id,
+                _format_schedule_main_text(hours),
+                parse_mode='HTML',
+                reply_markup=schedule_main_markup(bool(hours))
+            )
 
     def _format_preview_for_hour(hour: int) -> str:
         conn = db_manager.get_db_connection()
@@ -108,11 +140,18 @@ def register_admin_panel_handlers(bot: TeleBot):
         texts = [t['text'] for t in tweets] if tweets else []
         return _build_preview_block(texts)
 
+    # نمایش پیش‌نمایش ساعت (با بازگشت به پنل مدیریت ساعت‌ها)
     @bot.callback_query_handler(func=lambda call: call.data.startswith(('view_hour_', 'back_to_hours')) and db_manager.is_admin(call.message.chat.id))
     def callback_tweet_hours(call: CallbackQuery):
         if call.data == "back_to_hours":
             hours = db_manager.get_all_scheduler_hours()
-            bot.edit_message_text("⏰ یکی از ساعت‌ها را برای <b>پیش‌نمایش</b> انتخاب کنید:", call.message.chat.id, call.message.message_id, reply_markup=_hours_list_markup(hours), parse_mode='HTML')
+            # بازگشت به منوی پیش‌نمایش
+            bot.edit_message_text(
+                "👁️ <b>پیش‌نمایش ساعت‌ها</b>\n\n⏰ یکی از ساعت‌ها را انتخاب کنید:",
+                call.message.chat.id, call.message.message_id,
+                parse_mode='HTML',
+                reply_markup=schedule_preview_markup(hours)
+            )
             bot.answer_callback_query(call.id)
             return
 
@@ -126,13 +165,227 @@ def register_admin_panel_handlers(bot: TeleBot):
         preview_text = _format_preview_for_hour(hour)
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_hours"))
+        # دکمه بازگشت به پنل اصلی ساعت‌ها
+        markup.add(InlineKeyboardButton("🏠 بازگشت به مدیریت ساعت‌ها", callback_data="sched_back_main"))
 
         if len(preview_text) <= MAX_TG_MSG_LEN:
-            bot.edit_message_text(f"⏰ <b>پیش‌نمایش ساعت {hour}:00</b>\n\n{preview_text}", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='HTML')
+            bot.edit_message_text(f"⏰ <b>پیش‌نمایش ساعت {hour:02d}:00</b>\n\n{preview_text}", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='HTML')
         else:
-            bot.edit_message_text(f"⏰ <b>پیش‌نمایش ساعت {hour}:00</b>\n\n(متن طولانی است؛ در چند بخش ارسال می‌شود.)", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='HTML')
+            bot.edit_message_text(f"⏰ <b>پیش‌نمایش ساعت {hour:02d}:00</b>\n\n(متن طولانی است؛ در چند بخش ارسال می‌شود.)", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='HTML')
             _chunk_and_send_preview(bot, call.message.chat.id, preview_text)
         bot.answer_callback_query(call.id)
+
+    # =====================================================
+    # مدیریت ساعت‌ها – پنل اصلی و ناوبری
+    # =====================================================
+    @bot.callback_query_handler(func=lambda call: call.data in ["sched_back_main", "sched_refresh"] and db_manager.is_admin(call.message.chat.id))
+    def cb_sched_back_main(call: CallbackQuery):
+        hours = db_manager.get_all_scheduler_hours()
+        bot.edit_message_text(
+            _format_schedule_main_text(hours),
+            call.message.chat.id, call.message.message_id,
+            parse_mode='HTML',
+            reply_markup=schedule_main_markup(bool(hours))
+        )
+        bot.answer_callback_query(call.id, "🔄 بروزرسانی شد." if call.data == "sched_refresh" else "")
+
+    @bot.callback_query_handler(func=lambda call: call.data == "sched_preview_menu" and db_manager.is_admin(call.message.chat.id))
+    def cb_sched_preview_menu(call: CallbackQuery):
+        hours = db_manager.get_all_scheduler_hours()
+        if not hours:
+            bot.answer_callback_query(call.id, "⏰ هنوز ساعتی تعریف نشده است.", show_alert=True)
+            return
+        bot.edit_message_text(
+            "👁️ <b>پیش‌نمایش ساعت‌ها</b>\n\n⏰ یکی از ساعت‌ها را برای مشاهده توییت‌هایش انتخاب کنید:",
+            call.message.chat.id, call.message.message_id,
+            parse_mode='HTML',
+            reply_markup=schedule_preview_markup(hours)
+        )
+        bot.answer_callback_query(call.id)
+
+    # افزودن ساعت – نمایش ساعات آزاد
+    @bot.callback_query_handler(func=lambda call: call.data == "sched_add_menu" and db_manager.is_admin(call.message.chat.id))
+    def cb_sched_add_menu(call: CallbackQuery):
+        available = db_manager.get_available_hours()
+        if not available:
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("🔙 بازگشت", callback_data="sched_back_main"))
+            bot.edit_message_text(
+                "✅ <b>همه ساعت‌های شبانه‌روز (۰ تا ۲۳) قبلاً اضافه شده‌اند!</b>\n\n"
+                "🎉 دیگر ساعتی برای افزودن باقی نمانده است.",
+                call.message.chat.id, call.message.message_id,
+                parse_mode='HTML', reply_markup=markup
+            )
+            bot.answer_callback_query(call.id)
+            return
+        bot.edit_message_text(
+            "➕ <b>افزودن ساعت جدید ✨</b>\n\n"
+            "🕐 یکی از ساعت‌های آزاد زیر را انتخاب کنید:",
+            call.message.chat.id, call.message.message_id,
+            parse_mode='HTML',
+            reply_markup=schedule_add_markup(available)
+        )
+        bot.answer_callback_query(call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("sched_add_") and db_manager.is_admin(call.message.chat.id))
+    def cb_sched_add_pick(call: CallbackQuery):
+        try:
+            hour = int(call.data.replace("sched_add_", ""))
+        except Exception:
+            bot.answer_callback_query(call.id, "ساعت نامعتبر.")
+            return
+        if not (0 <= hour <= 23):
+            bot.answer_callback_query(call.id, "ساعت باید بین ۰ تا ۲۳ باشد.")
+            return
+        ok = db_manager.add_schedule_hour(hour)
+        if ok:
+            # همگام‌سازی زمان‌بندی
+            try:
+                job_scheduler.resync_tweet_schedule(bot, ADMIN_ID or call.message.chat.id)
+            except Exception:
+                pass
+            hours = db_manager.get_all_scheduler_hours()
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("🔙 بازگشت به مدیریت ساعت‌ها", callback_data="sched_back_main"))
+            hours_vertical = "\n".join([f"  • ⏰ <code>{h:02d}:00</code>" for h in sorted(hours)])
+            bot.edit_message_text(
+                f"✅ <b>ساعت {hour:02d}:00 با موفقیت اضافه شد! 🎉</b>\n\n"
+                f"⏰ <b>ساعت‌های فعال:</b>\n{hours_vertical}",
+                call.message.chat.id, call.message.message_id,
+                parse_mode='HTML', reply_markup=markup
+            )
+            bot.answer_callback_query(call.id, f"✅ ساعت {hour:02d}:00 اضافه شد.")
+        else:
+            bot.answer_callback_query(call.id, "⚠️ این ساعت قبلاً وجود دارد.", show_alert=True)
+
+    # حذف ساعت – مرحله ۱: انتخاب ساعت مبدا
+    @bot.callback_query_handler(func=lambda call: call.data == "sched_del_menu" and db_manager.is_admin(call.message.chat.id))
+    def cb_sched_del_menu(call: CallbackQuery):
+        hours = db_manager.get_all_scheduler_hours()
+        if not hours:
+            bot.answer_callback_query(call.id, "⏰ هیچ ساعتی برای حذف وجود ندارد.", show_alert=True)
+            return
+        if len(hours) == 1:
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("🔙 بازگشت", callback_data="sched_back_main"))
+            bot.edit_message_text(
+                f"⚠️ <b>تنها یک ساعت باقی مانده است!</b>\n\n"
+                f"⏰ ساعت فعال: <code>{hours[0]:02d}:00</code>\n"
+                "برای جلوگیری از اختلال در ارسال، حذف آخرین ساعت مجاز نیست.\n"
+                "ابتدا ساعت جدیدی اضافه کنید.",
+                call.message.chat.id, call.message.message_id,
+                parse_mode='HTML', reply_markup=markup
+            )
+            bot.answer_callback_query(call.id)
+            return
+        bot.edit_message_text(
+            "🗑️ <b>حذف ساعت ⏰</b>\n\n"
+            "لطفاً ساعتی که می‌خواهید حذف شود را انتخاب کنید:",
+            call.message.chat.id, call.message.message_id,
+            parse_mode='HTML',
+            reply_markup=schedule_del_pick_markup(hours)
+        )
+        bot.answer_callback_query(call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("sched_del_pick_") and db_manager.is_admin(call.message.chat.id))
+    def cb_sched_del_pick(call: CallbackQuery):
+        try:
+            source_hour = int(call.data.replace("sched_del_pick_", ""))
+        except Exception:
+            bot.answer_callback_query(call.id, "ساعت نامعتبر.")
+            return
+        hours = db_manager.get_all_scheduler_hours()
+        if source_hour not in hours:
+            bot.answer_callback_query(call.id, "این ساعت وجود ندارد.", show_alert=True)
+            return
+        count = db_manager.get_scheduler_tweet_count(source_hour)
+        other_hours = [h for h in hours if h != source_hour]
+
+        if count == 0:
+            # بدون توییت – مستقیم تایید نهایی
+            markup = schedule_del_confirm_markup(source_hour, None)
+            bot.edit_message_text(
+                f"🗑️ <b>حذف ساعت {source_hour:02d}:00</b>\n\n"
+                "📭 <b>توییتی در این ساعت وجود نداشت.</b>\n\n"
+                f"⚠️ آیا مطمئن هستید که می‌خواهید ساعت <code>{source_hour:02d}:00</code> حذف شود؟",
+                call.message.chat.id, call.message.message_id,
+                parse_mode='HTML', reply_markup=markup
+            )
+        else:
+            # دارای توییت – انتخاب مقصد
+            bot.edit_message_text(
+                f"🗑️ <b>حذف ساعت {source_hour:02d}:00</b>\n\n"
+                f"📦 این ساعت دارای <b>{count} توییت</b> است.\n"
+                "برای جلوگیری از حذف توییت‌ها، لطفاً انتخاب کنید توییت‌های این ساعت به کدام ساعت منتقل شوند؟ 👇\n\n"
+                "💡 <i>پس از انتخاب مقصد، تایید نهایی از شما گرفته خواهد شد.</i>",
+                call.message.chat.id, call.message.message_id,
+                parse_mode='HTML',
+                reply_markup=schedule_del_move_target_markup(source_hour, other_hours)
+            )
+        bot.answer_callback_query(call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("sched_del_target_") and db_manager.is_admin(call.message.chat.id))
+    def cb_sched_del_target(call: CallbackQuery):
+        try:
+            parts = call.data.replace("sched_del_target_", "").split("_")
+            source_hour = int(parts[0])
+            target_hour = int(parts[1])
+        except Exception:
+            bot.answer_callback_query(call.id, "مقادیر نامعتبر.")
+            return
+        count = db_manager.get_scheduler_tweet_count(source_hour)
+        bot.edit_message_text(
+            f"⚠️ <b>تایید نهایی حذف ساعت {source_hour:02d}:00</b>\n\n"
+            f"📦 تعداد توییت‌های قابل انتقال: <b>{count}</b>\n"
+            f"➡️ مقصد انتقال: <b>{target_hour:02d}:00 ⏰</b>\n\n"
+            f"آیا مطمئن هستید که ساعت <code>{source_hour:02d}:00</code> حذف شود و توییت‌های آن به ساعت <code>{target_hour:02d}:00</code> منتقل شوند؟",
+            call.message.chat.id, call.message.message_id,
+            parse_mode='HTML',
+            reply_markup=schedule_del_confirm_markup(source_hour, target_hour)
+        )
+        bot.answer_callback_query(call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("sched_del_confirm_") and db_manager.is_admin(call.message.chat.id))
+    def cb_sched_del_confirm(call: CallbackQuery):
+        try:
+            raw = call.data.replace("sched_del_confirm_", "")
+            s_str, t_str = raw.split("_", 1)
+            source_hour = int(s_str)
+            target_hour = None if t_str == "none" else int(t_str)
+        except Exception:
+            bot.answer_callback_query(call.id, "مقادیر نامعتبر.")
+            return
+
+        count_before = db_manager.get_scheduler_tweet_count(source_hour)
+        ok, msg = db_manager.delete_schedule_hour(source_hour, target_hour)
+        if ok:
+            try:
+                job_scheduler.resync_tweet_schedule(bot, ADMIN_ID or call.message.chat.id)
+            except Exception:
+                pass
+            hours = db_manager.get_all_scheduler_hours()
+            hours_vertical = "\n".join([f"  • ⏰ <code>{h:02d}:00</code>" for h in sorted(hours)]) if hours else "  • هیچ"
+            if count_before == 0:
+                success_text = (
+                    f"✅ <b>ساعت {source_hour:02d}:00 با موفقیت حذف شد! 🎉</b>\n\n"
+                    "📭 توییتی در این ساعت وجود نداشت، بنابراین نیازی به انتقال نبود.\n\n"
+                    f"⏰ <b>ساعت‌های باقی‌مانده:</b>\n{hours_vertical}"
+                )
+            else:
+                success_text = (
+                    f"✅ <b>ساعت {source_hour:02d}:00 با موفقیت حذف شد! 🎉</b>\n\n"
+                    f"📦 <b>{count_before} توییت</b> با موفقیت به ساعت <b>{target_hour:02d}:00 ⏰</b> منتقل شد.\n\n"
+                    f"⏰ <b>ساعت‌های باقی‌مانده:</b>\n{hours_vertical}"
+                )
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("🔙 بازگشت به مدیریت ساعت‌ها", callback_data="sched_back_main"))
+            bot.edit_message_text(success_text, call.message.chat.id, call.message.message_id, parse_mode='HTML', reply_markup=markup)
+            bot.answer_callback_query(call.id, "✅ حذف انجام شد.")
+        else:
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("🔙 بازگشت", callback_data="sched_del_menu"))
+            bot.edit_message_text(f"❌ <b>حذف ناموفق بود:</b>\n{msg}", call.message.chat.id, call.message.message_id, parse_mode='HTML', reply_markup=markup)
+            bot.answer_callback_query(call.id, "❌ خطا در حذف.", show_alert=True)
 
     # =====================================================
     # هندلرهای مدیریت ادمین‌ها (فقط سوپرادمین)
@@ -140,6 +393,13 @@ def register_admin_panel_handlers(bot: TeleBot):
     @bot.message_handler(func=lambda m: db_manager.is_superadmin(m.chat.id) and m.text == "👥 مدیریت ادمین‌ها")
     @bot.message_handler(commands=['admins'])
     def handle_admins_menu(message: Message):
+        if get_state(message.chat.id) in [S.TWEET_MODE, S.USER_WAIT_MAJOR, S.USER_SHOW_RESULTS]:
+            reset(message.chat.id)
+        try:
+            from handlers.admin_tweets import STATE as _ats
+            _ats.pop(message.chat.id, None)
+        except Exception:
+            pass
         if not db_manager.is_superadmin(message.chat.id):
             return
         bot.send_message(
@@ -302,6 +562,13 @@ def register_admin_panel_handlers(bot: TeleBot):
     @bot.message_handler(func=lambda m: db_manager.is_admin(m.chat.id) and m.text == "📣 پیام همگانی")
     @bot.message_handler(commands=['broadcast'])
     def handle_broadcast_menu(message: Message):
+        if get_state(message.chat.id) in [S.TWEET_MODE, S.USER_WAIT_MAJOR, S.USER_SHOW_RESULTS]:
+            reset(message.chat.id)
+        try:
+            from handlers.admin_tweets import STATE as _ats
+            _ats.pop(message.chat.id, None)
+        except Exception:
+            pass
         set_state(message.chat.id, S.ADMIN_WAIT_BROADCAST, {})
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_broadcast"))
@@ -430,6 +697,13 @@ def register_admin_panel_handlers(bot: TeleBot):
     # =====================================================
     @bot.message_handler(func=lambda m: db_manager.is_superadmin(m.chat.id) and m.text == "💾 مدیریت بکاپ")
     def handle_backup_menu(message: Message):
+        if get_state(message.chat.id) in [S.TWEET_MODE, S.USER_WAIT_MAJOR, S.USER_SHOW_RESULTS]:
+            reset(message.chat.id)
+        try:
+            from handlers.admin_tweets import STATE as _ats
+            _ats.pop(message.chat.id, None)
+        except Exception:
+            pass
         bot.send_message(
             message.chat.id,
             _format_backup_panel_text(),

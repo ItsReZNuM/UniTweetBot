@@ -2,9 +2,9 @@ import logging
 from telebot import TeleBot
 from telebot.types import Message
 from database import db_manager
-from utils.keyboards import tweet_action_markup, main_menu_markup
+from utils.keyboards import tweet_action_markup, main_menu_markup, is_reply_keyboard_command
 from utils.rate_limit import check_rate_limit, is_message_valid
-from states import S, get_state, set_state
+from states import S, get_state, set_state, reset
 
 logger = logging.getLogger(__name__)
 
@@ -23,15 +23,37 @@ def register_user_handlers(bot: TeleBot):
 
     @bot.message_handler(func=lambda m: m.chat.type == "private" and m.text == "🐦 ارسال توییت")
     def choose_tweet_mode(message: Message):
+        # خروج از هر حالت انتظاری قبلی و ورود به حالت توییت
+        try:
+            from handlers.admin_tweets import STATE as _ats
+            _ats.pop(message.chat.id, None)
+        except Exception:
+            pass
+        # اگر در حالت چارت بود، ریست شود
+        if get_state(message.from_user.id) in [S.USER_WAIT_MAJOR, S.USER_SHOW_RESULTS, S.ADMIN_MENU, S.ADMIN_ADD_WAIT_MAJOR, S.ADMIN_ADD_WAIT_FILE, S.ADMIN_DEL_WAIT_QUERY]:
+            reset(message.from_user.id)
         set_state(message.from_user.id, S.TWEET_MODE, {})
         bot.send_message(message.chat.id, "✍️ متن توییتت رو ارسال کن:")
 
     @bot.message_handler(func=lambda m: m.chat.type == "private" and m.text == "📊 دریافت چارت")
     def choose_chart_mode(message: Message):
+        try:
+            from handlers.admin_tweets import STATE as _ats
+            _ats.pop(message.chat.id, None)
+        except Exception:
+            pass
+        if get_state(message.from_user.id) == S.TWEET_MODE:
+            reset(message.from_user.id)
         set_state(message.from_user.id, S.USER_WAIT_MAJOR, {})
         bot.send_message(message.chat.id, "🎓 لطفاً نام رشته‌ات رو وارد کن تا چارتش رو پیدا کنم:")
 
-    @bot.message_handler(func=lambda message: (message.chat.type == "private" and message.text is not None and get_state(message.from_user.id) == S.TWEET_MODE))
+    @bot.message_handler(func=lambda message: (
+        message.chat.type == "private"
+        and message.text is not None
+        and get_state(message.from_user.id) == S.TWEET_MODE
+        and not is_reply_keyboard_command(message.text)
+        and not message.text.startswith("/")
+    ))
     def handle_new_tweet(message: Message):
         all_admins = db_manager.get_all_admins()
         if not all_admins:

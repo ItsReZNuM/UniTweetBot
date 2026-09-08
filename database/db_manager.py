@@ -319,6 +319,59 @@ def add_schedule_hour(hour):
         conn.close()
         return False
 
+def get_scheduler_tweet_ids(hour: int) -> list:
+    conn = get_db_connection()
+    row = conn.execute("SELECT tweet_ids FROM scheduler WHERE hour = ?", (hour,)).fetchone()
+    conn.close()
+    if not row or not row['tweet_ids']:
+        return []
+    try:
+        return json.loads(row['tweet_ids'])
+    except Exception:
+        return []
+
+def get_scheduler_tweet_count(hour: int) -> int:
+    return len(get_scheduler_tweet_ids(hour))
+
+def delete_schedule_hour(source_hour: int, target_hour: int | None = None) -> tuple[bool, str]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    row = cursor.execute("SELECT tweet_ids FROM scheduler WHERE hour = ?", (source_hour,)).fetchone()
+    if not row:
+        conn.close()
+        return False, "ساعت مبدا یافت نشد."
+    try:
+        source_ids = json.loads(row['tweet_ids']) if row['tweet_ids'] else []
+    except Exception:
+        source_ids = []
+
+    if source_ids and target_hour is not None:
+        if source_hour == target_hour:
+            conn.close()
+            return False, "ساعت مقصد نمی‌تواند همان ساعت مبدا باشد."
+        target_row = cursor.execute("SELECT tweet_ids FROM scheduler WHERE hour = ?", (target_hour,)).fetchone()
+        if not target_row:
+            conn.close()
+            return False, "ساعت مقصد یافت نشد."
+        try:
+            target_ids = json.loads(target_row['tweet_ids']) if target_row['tweet_ids'] else []
+        except Exception:
+            target_ids = []
+        merged = target_ids + [tid for tid in source_ids if tid not in target_ids]
+        cursor.execute("UPDATE scheduler SET tweet_ids = ? WHERE hour = ?", (json.dumps(merged), target_hour))
+        for tid in source_ids:
+            cursor.execute("UPDATE tweets SET approved_hour = ? WHERE id = ? AND status IN ('approved','sent')", (target_hour, tid))
+
+    cursor.execute("DELETE FROM scheduler WHERE hour = ?", (source_hour,))
+    conn.commit()
+    deleted = cursor.rowcount > 0
+    conn.close()
+    return (True, "ok") if deleted else (False, "حذف انجام نشد.")
+
+def get_available_hours() -> list[int]:
+    existing = set(get_all_scheduler_hours())
+    return [h for h in range(24) if h not in existing]
+
 def get_daily_stats():
     conn = get_db_connection()
     today = datetime.datetime.now().strftime("%Y-%m-%d")

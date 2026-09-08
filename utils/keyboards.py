@@ -43,6 +43,20 @@ def tweet_hours_markup(hours, tweet_id):
     markup.add(InlineKeyboardButton("🔙 بازگشت", callback_data=f"back_to_actions_{tweet_id}"))
     return markup
 
+REPLY_KEYBOARD_COMMANDS = {
+    "🐦 ارسال توییت",
+    "📊 دریافت چارت",
+    "📊 مشاهده آمار",
+    "⏰ ساعات توییت",
+    "📣 پیام همگانی",
+    "👥 مدیریت ادمین‌ها",
+    "👑 پنل مدیریت چارت",
+    "💾 مدیریت بکاپ",
+}
+
+def is_reply_keyboard_command(text: str | None) -> bool:
+    return text in REPLY_KEYBOARD_COMMANDS
+
 def main_menu_markup(user_id: int):
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     is_super = db_manager.is_superadmin(user_id)
@@ -116,6 +130,78 @@ def confirm_admin_del_markup(admin_id: int):
         InlineKeyboardButton("❌ خیر", callback_data="admin_del_no"),
     )
     markup.add(InlineKeyboardButton("🔙 بازگشت", callback_data="admin_mgmt_del"))
+    return markup
+
+# ====================
+# کیبوردهای مدیریت ساعت‌ها ⏰
+# ====================
+def schedule_main_markup(has_hours: bool = True):
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("👁️ پیش‌نمایش ساعت‌ها", callback_data="sched_preview_menu"),
+        InlineKeyboardButton("➕ افزودن ساعت", callback_data="sched_add_menu"),
+    )
+    markup.add(
+        InlineKeyboardButton("🗑️ حذف ساعت", callback_data="sched_del_menu"),
+        InlineKeyboardButton("🔄 بروزرسانی", callback_data="sched_refresh"),
+    )
+    return markup
+
+def schedule_preview_markup(hours: list):
+    markup = InlineKeyboardMarkup(row_width=3)
+    for h in hours:
+        markup.add(InlineKeyboardButton(f"⏰ {h:02d}:00", callback_data=f"view_hour_{h}"))
+    # در هر ردیف 3 تا؛ مرتب‌سازی دستی
+    # ساخت مجدد با row_width
+    # برای سادگی از حلقه بالا استفاده شد؛ دکمه بازگشت جدا
+    markup.add(InlineKeyboardButton("🔙 بازگشت به مدیریت ساعت‌ها", callback_data="sched_back_main"))
+    return markup
+
+def schedule_hours_grid(hours: list, row_width=3):
+    markup = InlineKeyboardMarkup(row_width=row_width)
+    buttons = [InlineKeyboardButton(f"⏰ {h:02d}:00", callback_data=f"view_hour_{h}") for h in hours]
+    for i in range(0, len(buttons), row_width):
+        markup.row(*buttons[i:i+row_width])
+    markup.add(InlineKeyboardButton("🔙 بازگشت", callback_data="sched_back_main"))
+    return markup
+
+def schedule_add_markup(available_hours: list):
+    markup = InlineKeyboardMarkup(row_width=4)
+    buttons = [InlineKeyboardButton(f"➕ {h:02d}:00", callback_data=f"sched_add_{h}") for h in available_hours]
+    for i in range(0, len(buttons), 4):
+        markup.row(*buttons[i:i+4])
+    markup.add(InlineKeyboardButton("🔙 بازگشت", callback_data="sched_back_main"))
+    return markup
+
+def schedule_del_pick_markup(hours: list):
+    markup = InlineKeyboardMarkup(row_width=3)
+    buttons = [InlineKeyboardButton(f"🗑️ {h:02d}:00", callback_data=f"sched_del_pick_{h}") for h in hours]
+    for i in range(0, len(buttons), 3):
+        markup.row(*buttons[i:i+3])
+    markup.add(InlineKeyboardButton("🔙 بازگشت", callback_data="sched_back_main"))
+    return markup
+
+def schedule_del_move_target_markup(source_hour: int, other_hours: list):
+    markup = InlineKeyboardMarkup(row_width=3)
+    buttons = [InlineKeyboardButton(f"➡️ {h:02d}:00", callback_data=f"sched_del_target_{source_hour}_{h}") for h in other_hours]
+    for i in range(0, len(buttons), 3):
+        markup.row(*buttons[i:i+3])
+    markup.add(InlineKeyboardButton("🔙 بازگشت", callback_data="sched_del_menu"))
+    return markup
+
+def schedule_del_confirm_markup(source_hour: int, target_hour: int | None = None):
+    markup = InlineKeyboardMarkup(row_width=2)
+    if target_hour is not None:
+        markup.add(
+            InlineKeyboardButton("✅ بله، حذف و انتقال بده", callback_data=f"sched_del_confirm_{source_hour}_{target_hour}"),
+            InlineKeyboardButton("❌ انصراف", callback_data="sched_del_menu"),
+        )
+    else:
+        markup.add(
+            InlineKeyboardButton("✅ بله، حذف کن", callback_data=f"sched_del_confirm_{source_hour}_none"),
+            InlineKeyboardButton("❌ انصراف", callback_data="sched_del_menu"),
+        )
+    markup.add(InlineKeyboardButton("🔙 بازگشت", callback_data="sched_del_menu"))
     return markup
 
 # ====================

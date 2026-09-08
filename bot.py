@@ -17,9 +17,10 @@ db_manager.init_db()
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
 
+# ترتیب ثبت هندلرها مهم است: کیبوردهای ادمین قبل از حالت TWEET_MODE بررسی شوند تا باگ تداخل رخ ندهد
+admin_panel.register_admin_panel_handlers(bot)
 user_tweets.register_user_handlers(bot)
 admin_tweets.register_admin_handlers(bot)
-admin_panel.register_admin_panel_handlers(bot)
 register_chart_handlers(bot)
 
 if ADMIN_ID:

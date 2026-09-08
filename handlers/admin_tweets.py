@@ -9,7 +9,8 @@ from utils.keyboards import (
     tweet_done_markup,
     confirm_rejection_markup,
     edit_tweet_markup,
-    tweet_hours_markup
+    tweet_hours_markup,
+    is_reply_keyboard_command
 )
 
 STATE = {}
@@ -289,7 +290,7 @@ def register_admin_handlers(bot: TeleBot):
         bot.answer_callback_query(call.id)
 
     @bot.message_handler(
-        func=lambda m: db_manager.is_admin(m.chat.id) and m.chat.id in STATE,
+        func=lambda m: db_manager.is_admin(m.chat.id) and m.chat.id in STATE and not (m.text and is_reply_keyboard_command(m.text)),
         content_types=['text', 'photo', 'video', 'document', 'audio', 'voice', 'animation', 'sticker']
     )
     def handle_admin_input(message: Message):

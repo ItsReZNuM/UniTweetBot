@@ -14,6 +14,7 @@ from handlers.chart_keyboards import (
     admin_menu_kb, admin_del_results_kb, confirm_delete_kb
 )
 from handlers.chart_fuzzy_search import fuzzy_match
+from utils.keyboards import is_reply_keyboard_command
 
 def register_chart_handlers(bot: TeleBot):
     chart_db.init_db()
@@ -46,6 +47,9 @@ def register_chart_handlers(bot: TeleBot):
     # دکمه منوی اصلی ادمین برای ورود مستقیم به پنل چارت
     @bot.message_handler(func=lambda m: m.chat.type == "private" and m.text == "👑 پنل مدیریت چارت" and is_admin(m.chat.id))
     def open_chart_admin_menu(message: Message):
+        # خروج از حالت توییت اگر فعال باشد
+        if get_state(message.chat.id) == S.TWEET_MODE:
+            reset(message.chat.id)
         set_state(message.chat.id, S.ADMIN_MENU, {})
         bot.send_message(message.chat.id, "👑 <b>پنل مدیریت چارت</b>\n\nیکی از گزینه‌ها رو انتخاب کن:", reply_markup=admin_menu_kb())
 
@@ -173,11 +177,14 @@ def register_chart_handlers(bot: TeleBot):
     # ---------------------------
     # دریافت متن
     # ---------------------------
-    @bot.message_handler(func=lambda m: True, content_types=["text"])
+    @bot.message_handler(func=lambda m: m.text is not None and not is_reply_keyboard_command(m.text) and not m.text.startswith("/"), content_types=["text"])
     def on_text(message: Message):
         uid = message.from_user.id
         st = get_state(uid)
         txt = message.text.strip()
+        # اگر کاربر در حالت توییت باشد، این هندلر نباید متن را به عنوان جستجوی چارت بگیرد
+        if st == S.TWEET_MODE:
+            return
 
         if st == S.IDLE:
             go_home(message)
