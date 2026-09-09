@@ -16,8 +16,40 @@ def tweet_action_markup(tweet_id):
     return markup
 
 def tweet_done_markup(tweet_id):
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("↩️ ارسال پیام به کاربر", callback_data=f"reply_{tweet_id}"),
+        InlineKeyboardButton("🗑️ حذف توییت", callback_data=f"unapprove_ask_{tweet_id}")
+    )
+    return markup
+
+def confirm_unapprove_markup(tweet_id):
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("↩️ ارسال پیام به کاربر", callback_data=f"reply_{tweet_id}"))
+    markup.add(InlineKeyboardButton("❓ آیا از حذف شدن این توییت مطمئن هستید؟", callback_data="ignore_action"))
+    markup.row(
+        InlineKeyboardButton("✅ بله", callback_data=f"unapprove_yes_{tweet_id}"),
+        InlineKeyboardButton("❌ خیر", callback_data=f"unapprove_no_{tweet_id}")
+    )
+    return markup
+
+def tweet_removed_markup(tweet_id):
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("↩️ پشیمون شدم", callback_data=f"restore_tweet_{tweet_id}"),
+        InlineKeyboardButton("↩️ ارسال پیام به کاربر", callback_data=f"reply_{tweet_id}")
+    )
+    return markup
+
+def schedule_preview_detail_markup(hour: int, tweets: list):
+    markup = InlineKeyboardMarkup(row_width=2)
+    buttons = [
+        InlineKeyboardButton(f"🗑️ توییت {idx}", callback_data=f"sched_del_tw_{hour}_{t['id']}")
+        for idx, t in enumerate(tweets, start=1)
+    ]
+    for i in range(0, len(buttons), 2):
+        markup.row(*buttons[i:i+2])
+    markup.add(InlineKeyboardButton("🔙 بازگشت به لیست ساعت‌ها", callback_data="back_to_hours"))
+    markup.add(InlineKeyboardButton("🏠 بازگشت به مدیریت ساعت‌ها", callback_data="sched_back_main"))
     return markup
 
 def confirm_rejection_markup(tweet_id):

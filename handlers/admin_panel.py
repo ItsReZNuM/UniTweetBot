@@ -18,6 +18,7 @@ from utils.keyboards import (
     schedule_del_pick_markup,
     schedule_del_move_target_markup,
     schedule_del_confirm_markup,
+    schedule_preview_detail_markup,
 )
 from utils import job_scheduler
 
@@ -120,32 +121,35 @@ def register_admin_panel_handlers(bot: TeleBot):
                 reply_markup=schedule_main_markup(bool(hours))
             )
 
-    def _format_preview_for_hour(hour: int) -> str:
+    def _get_preview_data_for_hour(hour: int) -> tuple[str, list[dict]]:
         conn = db_manager.get_db_connection()
         row = conn.execute("SELECT tweet_ids FROM scheduler WHERE hour = ?", (hour,)).fetchone()
         if not row or not row['tweet_ids']:
             conn.close()
-            return _build_preview_block([])
+            return _build_preview_block([]), []
         try:
             tweet_ids = json.loads(row['tweet_ids'])
         except Exception:
             tweet_ids = []
         if not tweet_ids:
             conn.close()
-            return _build_preview_block([])
+            return _build_preview_block([]), []
 
         qmarks = ",".join(["?"] * len(tweet_ids))
-        tweets = conn.execute(f"SELECT id, text FROM tweets WHERE id IN ({qmarks}) ORDER BY id", tweet_ids).fetchall()
+        tweets = conn.execute(f"SELECT id, text FROM tweets WHERE id IN ({qmarks})", tweet_ids).fetchall()
         conn.close()
-        texts = [t['text'] for t in tweets] if tweets else []
-        return _build_preview_block(texts)
+
+        tweet_map = {t['id']: dict(t) for t in tweets}
+        ordered_tweets = [tweet_map[tid] for tid in tweet_ids if tid in tweet_map]
+
+        texts = [f"{idx}) {t['text']}" for idx, t in enumerate(ordered_tweets, start=1)]
+        return _build_preview_block(texts), ordered_tweets
 
     # نمایش پیش‌نمایش ساعت (با بازگشت به پنل مدیریت ساعت‌ها)
     @bot.callback_query_handler(func=lambda call: call.data.startswith(('view_hour_', 'back_to_hours')) and db_manager.is_admin(call.message.chat.id))
     def callback_tweet_hours(call: CallbackQuery):
         if call.data == "back_to_hours":
             hours = db_manager.get_all_scheduler_hours()
-            # بازگشت به منوی پیش‌نمایش
             bot.edit_message_text(
                 "👁️ <b>پیش‌نمایش ساعت‌ها</b>\n\n⏰ یکی از ساعت‌ها را انتخاب کنید:",
                 call.message.chat.id, call.message.message_id,
@@ -162,11 +166,8 @@ def register_admin_panel_handlers(bot: TeleBot):
             bot.answer_callback_query(call.id, "ساعت نامعتبر.")
             return
 
-        preview_text = _format_preview_for_hour(hour)
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_hours"))
-        # دکمه بازگشت به پنل اصلی ساعت‌ها
-        markup.add(InlineKeyboardButton("🏠 بازگشت به مدیریت ساعت‌ها", callback_data="sched_back_main"))
+        preview_text, tweets = _get_preview_data_for_hour(hour)
+        markup = schedule_preview_detail_markup(hour, tweets)
 
         if len(preview_text) <= MAX_TG_MSG_LEN:
             bot.edit_message_text(f"⏰ <b>پیش‌نمایش ساعت {hour:02d}:00</b>\n\n{preview_text}", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='HTML')
@@ -768,6 +769,38 @@ def register_admin_panel_handlers(bot: TeleBot):
             reply_markup=backup_menu_markup()
         )
         bot.answer_callback_query(call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("sched_del_tw_") and db_manager.is_admin(call.message.chat.id))
+    def cb_sched_delete_single_tweet(call: CallbackQuery):
+        try:
+            parts = call.data.split("_")
+            hour = int(parts[3])
+            tweet_id = int(parts[4])
+        except Exception:
+            bot.answer_callback_query(call.id, "⚠️ اطلاعات نامعتبر است.")
+            return
+
+        admin_tag = f"@{call.from_user.username}" if call.from_user.username else (call.from_user.first_name or str(call.from_user.id))
+        db_manager.unapprove_tweet(tweet_id, handled_by=admin_tag)
+
+        try:
+            from handlers.admin_tweets import _refresh_all_admin_messages
+            _refresh_all_admin_messages(bot, tweet_id)
+        except Exception:
+            pass
+
+        preview_text, tweets = _get_preview_data_for_hour(hour)
+        markup = schedule_preview_detail_markup(hour, tweets)
+
+        if len(preview_text) <= MAX_TG_MSG_LEN:
+            bot.edit_message_text(
+                f"⏰ <b>پیش‌نمایش ساعت {hour:02d}:00</b>\n\n{preview_text}",
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=markup,
+                parse_mode='HTML'
+            )
+        bot.answer_callback_query(call.id, "🗑️ توییت با موفقیت از این ساعت حذف شد.")
 
 def send_stats_menu(bot: TeleBot, chat_id, message_id=None):
     total_users = len(db_manager.get_all_users_id())

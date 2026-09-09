@@ -271,6 +271,33 @@ def approve_tweet(tweet_id, hour, handled_by=None):
     conn.commit()
     conn.close()
 
+def unapprove_tweet(tweet_id: int, handled_by: str = None) -> int | None:
+    """Remove approved tweet from scheduler and mark as removed"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    tweet = cursor.execute("SELECT approved_hour, handled_by FROM tweets WHERE id = ?", (tweet_id,)).fetchone()
+    if not tweet:
+        conn.close()
+        return None
+
+    hour = tweet['approved_hour']
+    if hour is not None:
+        row = cursor.execute("SELECT tweet_ids FROM scheduler WHERE hour = ?", (hour,)).fetchone()
+        if row and row['tweet_ids']:
+            try:
+                tweet_ids = json.loads(row['tweet_ids'])
+                if tweet_id in tweet_ids:
+                    tweet_ids.remove(tweet_id)
+                    cursor.execute("UPDATE scheduler SET tweet_ids = ? WHERE hour = ?", (json.dumps(tweet_ids), hour))
+            except Exception:
+                pass
+
+    admin_tag = handled_by or tweet['handled_by']
+    cursor.execute("UPDATE tweets SET status = 'removed', handled_by = ? WHERE id = ?", (admin_tag, tweet_id))
+    conn.commit()
+    conn.close()
+    return hour
+
 def reject_tweet(tweet_id, reason, handled_by=None):
     conn = get_db_connection()
     conn.execute("UPDATE tweets SET status = 'rejected', rejection_reason = ?, handled_by = ? WHERE id = ?", (reason, handled_by, tweet_id))

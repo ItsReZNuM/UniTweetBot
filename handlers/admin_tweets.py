@@ -10,7 +10,9 @@ from utils.keyboards import (
     confirm_rejection_markup,
     edit_tweet_markup,
     tweet_hours_markup,
-    is_reply_keyboard_command
+    is_reply_keyboard_command,
+    confirm_unapprove_markup,
+    tweet_removed_markup,
 )
 
 STATE = {}
@@ -64,6 +66,14 @@ def _refresh_all_admin_messages(bot: TeleBot, tweet_id: int):
             f"✍️ <b>دلیل رد:</b> {reason}"
         )
         reply_kb = tweet_done_markup(tweet_id)
+    elif tweet["status"] == "removed":
+        hour = tweet.get("approved_hour")
+        hour_str = f"{hour:02d}:00" if hour is not None else "نامشخص"
+        base += (
+            f"\n\n━━━━━━━━━━━━━━━━━━━━\n"
+            f"<b>وضعیت:</b> 🗑️ توییت با موفقیت از ساعت <b>{hour_str}</b> حذف شد.{handled_str}"
+        )
+        reply_kb = tweet_removed_markup(tweet_id)
     elif tweet["status"] == "sent":
         base += f"\n\n━━━━━━━━━━━━━━━━━━━━\n<b>وضعیت:</b> 📤 در کانال ارسال شد"
         reply_kb = None
@@ -104,6 +114,11 @@ def _refresh_single_admin_message(bot: TeleBot, admin_chat_id: int, tweet_id: in
     elif tweet["status"] == "rejected":
         base += f"\n\n━━━━━━━━━━━━━━━━━━━━\n<b>وضعیت:</b> ❌ رد شد{handled_str}\n✍️ دلیل رد: {tweet['rejection_reason']}"
         kb = tweet_done_markup(tweet_id)
+    elif tweet["status"] == "removed":
+        hour = tweet.get("approved_hour")
+        hour_str = f"{hour:02d}:00" if hour is not None else "نامشخص"
+        base += f"\n\n━━━━━━━━━━━━━━━━━━━━\n<b>وضعیت:</b> 🗑️ توییت با موفقیت از ساعت <b>{hour_str}</b> حذف شد.{handled_str}"
+        kb = tweet_removed_markup(tweet_id)
     else:
         kb = tweet_action_markup(tweet_id)
 
@@ -126,11 +141,57 @@ def register_admin_handlers(bot: TeleBot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith((
         'approve_', 'reject_', 'confirm_reject_', 'cancel_reject_',
         'reply_', 'edit_', 'confirm_edit_', 'cancel_edit_',
-        'hour_', 'back_to_actions_'
+        'hour_', 'back_to_actions_',
+        'unapprove_ask_', 'unapprove_yes_', 'unapprove_no_',
+        'restore_tweet_', 'ignore_action'
     )) and db_manager.is_admin(call.message.chat.id))
     def callback_admin_actions(call: CallbackQuery):
         origin_msg_id = call.message.message_id
+        if call.data == "ignore_action":
+            bot.answer_callback_query(call.id)
+            return
 
+        if call.data.startswith("unapprove_ask_"):
+            tweet_id = int(call.data.replace("unapprove_ask_", ""))
+            bot.edit_message_reply_markup(
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=confirm_unapprove_markup(tweet_id)
+            )
+            bot.answer_callback_query(call.id)
+            return
+
+        if call.data.startswith("unapprove_no_"):
+            tweet_id = int(call.data.replace("unapprove_no_", ""))
+            bot.edit_message_reply_markup(
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=tweet_done_markup(tweet_id)
+            )
+            bot.answer_callback_query(call.id, "👌 عملیات لغو شد.")
+            return
+
+        if call.data.startswith("unapprove_yes_"):
+            tweet_id = int(call.data.replace("unapprove_yes_", ""))
+            admin_tag = _get_admin_tag(call.from_user)
+            hour = db_manager.unapprove_tweet(tweet_id, handled_by=admin_tag)
+            hour_str = f"{hour:02d}:00" if hour is not None else ""
+            bot.answer_callback_query(call.id, f"🗑️ توییت با موفقیت از ساعت {hour_str} حذف شد.")
+            _refresh_all_admin_messages(bot, tweet_id)
+            return
+
+        if call.data.startswith("restore_tweet_"):
+            tweet_id = int(call.data.replace("restore_tweet_", ""))
+            tweet = db_manager.get_tweet_by_id(tweet_id)
+            if not tweet or tweet.get("approved_hour") is None:
+                bot.answer_callback_query(call.id, "⚠️ ساعت این توییت یافت نشد.", show_alert=True)
+                return
+            admin_tag = _get_admin_tag(call.from_user)
+            hour = tweet["approved_hour"]
+            db_manager.approve_tweet(tweet_id, hour, handled_by=admin_tag)
+            bot.answer_callback_query(call.id, f"✅ توییت مجدداً به ساعت {hour:02d}:00 بازگردانده شد.")
+            _refresh_all_admin_messages(bot, tweet_id)
+            return
         try:
             data, arg = call.data.split('_', 1)
             tweet_id = None
